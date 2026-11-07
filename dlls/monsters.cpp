@@ -34,6 +34,7 @@
 #include "soundent.h"
 #include "gamerules.h"
 #include "game.h"
+#include "xb_gore.h"
 
 #if XASH_UWP
 #define AIMASSIST_HOSTILE 0x4141 // must match engine/client/input/in_aimassist.c
@@ -2003,6 +2004,10 @@ void CBaseMonster::MoveExecute( CBaseEntity *pTargetEnt, const Vector &vecDir, f
 //=========================================================
 void CBaseMonster::MonsterInit( void )
 {
+#if XASH_UWP
+	// an entity slot reused by a new monster must not stay a ragdoll
+	XBRagdoll_Clear( this );
+#endif
 	if( !g_pGameRules->FAllowMonsters() )
 	{
 		pev->flags |= FL_KILLME;		// Post this because some monster code modifies class data after calling this function

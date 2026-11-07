@@ -108,8 +108,15 @@ HUD_DrawTransparentTriangles
 Render any triangles with transparent rendermode needs here
 =================
 */
+#if XASH_UWP
+void XBGoreWorld_Draw( void );
+#endif
+
 void DLLEXPORT HUD_DrawTransparentTriangles( void )
 {
+#if XASH_UWP
+	XBGoreWorld_Draw(); // blood droplets, splats, pools, footprints
+#endif
 #if TEST_IT
 //	Draw_Triangles();
 #endif

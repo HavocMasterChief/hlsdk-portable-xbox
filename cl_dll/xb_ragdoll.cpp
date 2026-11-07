@@ -178,8 +178,19 @@ static int MsgFunc_XBRagdoll( const char *pszName, int iSize, void *pbuf )
 	int force = READ_BYTE();
 	int hitgroup = READ_BYTE();
 
+	// 255: the entity (re)spawned alive, drop any ragdoll it had
+	if( hitgroup == 255 )
+	{
+		rdBody_t *old = RD_Find( ent );
+		if( old )
+			old->used = false;
+		return 1;
+	}
+
 	if( !xb_ragdoll || !xb_ragdoll->value )
 		return 1;
+
+	gEngfuncs.Con_DPrintf( "ragdoll: ent %d died (force %d, hitgroup %d)\n", ent, force, hitgroup );
 
 	rdBody_t *b = RD_Find( ent );
 	if( !b )
@@ -252,7 +263,10 @@ static bool RD_Start( rdBody_t *b, cl_entity_t *ent, studiohdr_t *hdr, float (*b
 		}
 
 		if( b->jointBone[j] < 0 )
+		{
+			gEngfuncs.Con_DPrintf( "ragdoll: ent %d (%s) has no %s bone, keeps its death animation\n", ent->index, ent->model ? ent->model->name : "?", s_jointBones[j][0] );
 			return false; // not a human skeleton
+		}
 	}
 
 	// every bone moves with the part of its nearest joint ancestor
@@ -291,6 +305,8 @@ static bool RD_Start( rdBody_t *b, cl_entity_t *ent, studiohdr_t *hdr, float (*b
 
 	for( unsigned l = 0; l < RD_NUM_LINKS; l++ )
 		b->linkLen[l] = ( b->restJoint[s_links[l][0]] - b->restJoint[s_links[l][1]] ).Length();
+
+	gEngfuncs.Con_DPrintf( "ragdoll: ent %d (%s) started, %d bones\n", ent->index, ent->model ? ent->model->name : "?", hdr->numbones );
 
 	b->model = ent->model;
 	b->sequence = ent->curstate.sequence;
@@ -418,7 +434,7 @@ void XBRagdoll_Apply( cl_entity_t *ent, void *studiohdr, float (*bones)[MAXSTUDI
 		return;
 
 	// slot taken over by something else (new monster, revived by a script)
-	if( b->started && ( ent->model != b->model || ent->curstate.sequence != b->sequence || hdr->numbones != b->numbones ))
+	if( b->started && ( ent->model != b->model || hdr->numbones != b->numbones ))
 	{
 		b->used = false;
 		return;
@@ -511,6 +527,27 @@ void XBRagdoll_Apply( cl_entity_t *ent, void *studiohdr, float (*bones)[MAXSTUDI
 		if( lights )
 			memcpy( (*lights)[i], out, sizeof( out ));
 	}
+}
+
+/*
+=============
+XBRagdoll_BodyPelvis
+
+Where a ragdolled body's pelvis is, for the blood pool under it.
+=============
+*/
+bool XBRagdoll_BodyPelvis( int ent, float *out, bool *settled )
+{
+	rdBody_t *b = RD_Find( ent );
+
+	if( !b || !b->started )
+		return false;
+
+	out[0] = b->p[J_PELVIS].x;
+	out[1] = b->p[J_PELVIS].y;
+	out[2] = b->p[J_PELVIS].z;
+	*settled = !b->moving;
+	return true;
 }
 
 #endif // XASH_UWP

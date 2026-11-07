@@ -38,7 +38,9 @@ void XBRagdoll_Send( CBaseMonster *pMonster );   // body becomes a ragdoll (cl_d
 
 extern int gmsgXBGore;
 extern int gmsgXBRagdoll;
-extern int gmsgXBDrops;                   // screen splats (cl_dll/xb_gore_hud.cpp)
+extern int gmsgXBDrops;
+extern int gmsgXBPool;
+void XBRagdoll_Clear( CBaseEntity *pEnt );   // a respawned monster stops being a ragdoll
 
 #endif // XASH_UWP
 #endif // XB_GORE_H

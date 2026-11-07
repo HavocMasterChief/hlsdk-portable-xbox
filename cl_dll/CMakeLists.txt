@@ -123,6 +123,7 @@ set (CLDLL_SOURCES
 	xb_gore_hud.cpp
 	xb_ragdoll.cpp
 	xb_wheel.cpp
+	xb_gore_world.cpp
 	../public/safe_snprintf.c
 )
 
