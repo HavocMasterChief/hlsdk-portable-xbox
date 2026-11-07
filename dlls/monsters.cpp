@@ -35,6 +35,10 @@
 #include "gamerules.h"
 #include "game.h"
 
+#if XASH_UWP
+#define AIMASSIST_HOSTILE 0x4141 // must match engine/client/input/in_aimassist.c
+#endif
+
 #define MONSTER_CUT_CORNER_DIST		8 // 8 means the monster's bounding box is contained without the box of the node in WC
 
 Vector VecBModelOrigin( entvars_t *pevBModel );
@@ -524,6 +528,19 @@ void CBaseMonster::MonsterThink( void )
 	pev->nextthink = gpGlobals->time + 0.1f;// keep monster thinking.
 
 	RunAI();
+
+#if XASH_UWP
+	// Xbox aim assist (engine/client/input/in_aimassist.c) only locks on to
+	// monsters flagged here, so friendly scientists and guards are skipped
+	{
+		CBaseEntity *pPlayer = UTIL_PlayerByIndex( 1 );
+
+		if( pPlayer && IsAlive() && IRelationship( pPlayer ) > R_NO )
+			pev->iuser4 = AIMASSIST_HOSTILE;
+		else if( pev->iuser4 == AIMASSIST_HOSTILE )
+			pev->iuser4 = 0;
+	}
+#endif
 
 	float flInterval = StudioFrameAdvance( ); // animate
 
