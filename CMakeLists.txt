@@ -48,6 +48,8 @@ project (HLSDK-PORTABLE)
 if(CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
 	# Xbox Series Dev Mode (UWP) build
 	add_compile_definitions(XASH_UWP=1 _CRT_SECURE_NO_WARNINGS)
+	# UWP projects default to /sdl, which turns old-SDK warnings (C4703) into errors
+	add_compile_options(/sdl-)
 endif()
 
 #--------------
