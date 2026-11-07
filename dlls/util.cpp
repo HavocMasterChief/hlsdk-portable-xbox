@@ -31,6 +31,7 @@
 #include "weapons.h"
 #include "gamerules.h"
 #include "byteswap.h"
+#include "xb_gore.h"
 
 float UTIL_WeaponTimeBase( void )
 {
@@ -1074,6 +1075,10 @@ int UTIL_IsMasterTriggered( string_t sMaster, CBaseEntity *pActivator )
 
 BOOL UTIL_ShouldShowBlood( int color )
 {
+#if XASH_UWP
+	if( XBGore_Mode() == XB_BLOOD_OFF )
+		return FALSE;
+#endif
 	if( color != DONT_BLEED )
 	{
 		if( color == BLOOD_COLOR_RED )
@@ -1097,6 +1102,11 @@ int UTIL_PointContents(	const Vector &vec )
 
 void UTIL_BloodStream( const Vector &origin, const Vector &direction, int color, int amount )
 {
+#if XASH_UWP
+	color = XBGore_Color( color );
+	if( XBGore_Extreme() )
+		amount = amount * 3 / 2;
+#endif
 	if( !UTIL_ShouldShowBlood( color ) )
 		return;
 
@@ -1115,6 +1125,11 @@ void UTIL_BloodStream( const Vector &origin, const Vector &direction, int color,
 
 void UTIL_BloodDrips( const Vector &origin, const Vector &direction, int color, int amount )
 {
+#if XASH_UWP
+	color = XBGore_Color( color );
+	if( XBGore_Extreme() )
+		amount *= 2;
+#endif
 	if( !UTIL_ShouldShowBlood( color ) )
 		return;
 
@@ -1155,6 +1170,9 @@ Vector UTIL_RandomBloodVector( void )
 
 void UTIL_BloodDecalTrace( TraceResult *pTrace, int bloodColor )
 {
+#if XASH_UWP
+	bloodColor = XBGore_Color( bloodColor );
+#endif
 	if( UTIL_ShouldShowBlood( bloodColor ) )
 	{
 		if( bloodColor == BLOOD_COLOR_RED )

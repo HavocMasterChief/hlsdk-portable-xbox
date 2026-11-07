@@ -376,6 +376,9 @@ void CHud::Init( void )
 	m_SayText.Init();
 	m_Spectator.Init();
 	m_Geiger.Init();
+#if XASH_UWP
+	m_XBGore.Init();
+#endif
 	m_Train.Init();
 	m_Battery.Init();
 	m_Flash.Init();
@@ -569,6 +572,9 @@ void CHud::VidInit( void )
 	m_Health.VidInit();
 	m_Spectator.VidInit();
 	m_Geiger.VidInit();
+#if XASH_UWP
+	m_XBGore.VidInit();
+#endif
 	m_Train.VidInit();
 	m_Battery.VidInit();
 	m_Flash.VidInit();

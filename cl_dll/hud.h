@@ -186,6 +186,34 @@ private:
 	int m_iGeigerRange;
 };
 
+#if XASH_UWP
+//
+//-----------------------------------------------------
+// Xbox build: blood on the screen (Extreme blood mode), see xb_gore_hud.cpp
+//
+#define XB_MAX_SPLATS 16
+
+class CHudXBGore : public CHudBase
+{
+public:
+	int Init( void );
+	int VidInit( void );
+	int Draw( float flTime );
+	int MsgFunc_XBGore( const char *pszName, int iSize, void *pbuf );
+
+private:
+	struct xbSplat_t
+	{
+		float start, life;
+		float x, y, size, angle, slide;
+		int frame;
+	} m_splats[XB_MAX_SPLATS];
+	HSPRITE m_hSprite;
+};
+
+void XB_Rumble( float low, float high, int ms, float rightTrigger );
+#endif
+
 //
 //-----------------------------------------------------
 //
@@ -602,6 +630,9 @@ public:
 	CHudHealth		m_Health;
 	CHudSpectator		m_Spectator;
 	CHudGeiger		m_Geiger;
+#if XASH_UWP
+	CHudXBGore		m_XBGore;
+#endif
 	CHudBattery		m_Battery;
 	CHudTrain		m_Train;
 	CHudFlashlight	m_Flash;

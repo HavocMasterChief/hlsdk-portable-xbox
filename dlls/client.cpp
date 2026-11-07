@@ -39,6 +39,7 @@
 #include "usercmd.h"
 #include "netadr.h"
 #include "pm_shared.h"
+#include "xb_gore.h"
 
 extern DLL_GLOBAL ULONG		g_ulModelIndexPlayer;
 extern DLL_GLOBAL BOOL		g_fGameOver;
@@ -810,6 +811,10 @@ void StartFrame( void )
 
 	if( g_pGameRules )
 		g_pGameRules->Think();
+
+#if XASH_UWP
+	XBGore_Frame();
+#endif
 
 	if( g_fGameOver )
 		return;

@@ -1594,6 +1594,16 @@ Client side punch effect
 void V_PunchAxis( int axis, float punch )
 {
 	g_ev_punchangle[axis] = punch;
+
+#if XASH_UWP
+	// weapon kick -> controller rumble (only the local player's weapons punch the view)
+	{
+		float k = fabs( punch ) / 10.0f; // glock ~0.2, shotgun/357 ~0.5-1
+		if( k > 1.0f ) k = 1.0f;
+		if( axis == 0 && k > 0.0f )
+			XB_Rumble( 0.15f + 0.45f * k, 0.25f + 0.55f * k, (int)( 60 + 120 * k ), 0.25f + 0.6f * k );
+	}
+#endif
 }
 
 /*

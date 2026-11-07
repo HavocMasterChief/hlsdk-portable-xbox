@@ -30,6 +30,7 @@
 #include "weapons.h"
 #include "func_break.h"
 #include "game.h"
+#include "xb_gore.h"
 
 extern DLL_GLOBAL Vector		g_vecAttackDir;
 extern DLL_GLOBAL int			g_iSkillLevel;
@@ -281,10 +282,17 @@ void CBaseMonster::GibMonster( void )
 
 	EMIT_SOUND( ENT( pev ), CHAN_WEAPON, "common/bodysplat.wav", 1, ATTN_NORM );
 
+#if XASH_UWP
+	XBGore_Gibbed( this );
+	const bool xbGibs = XBGore_Mode() != XB_BLOOD_OFF;
+#else
+	const bool xbGibs = true;
+#endif
+
 	// only humans throw skulls !!!UNDONE - eventually monsters will have their own sets of gibs
 	if( HasHumanGibs() )
 	{
-		if( CVAR_GET_FLOAT( "violence_hgibs" ) != 0 )	// Only the player will ever get here
+		if( xbGibs && CVAR_GET_FLOAT( "violence_hgibs" ) != 0 )	// Only the player will ever get here
 		{
 			CGib::SpawnHeadGib( pev );
 			CGib::SpawnRandomGibs( pev, 4, 1 );	// throw some human gibs.
@@ -293,7 +301,7 @@ void CBaseMonster::GibMonster( void )
 	}
 	else if( HasAlienGibs() )
 	{
-		if( CVAR_GET_FLOAT( "violence_agibs" ) != 0 )	// Should never get here, but someone might call it directly
+		if( xbGibs && CVAR_GET_FLOAT( "violence_agibs" ) != 0 )	// Should never get here, but someone might call it directly
 		{
 			CGib::SpawnRandomGibs( pev, 4, 0 );	// Throw alien gibs
 		}
@@ -572,6 +580,10 @@ void CBaseMonster::Killed( entvars_t *pevAttacker, int iGib )
 	}
 
 	Remember( bits_MEMORY_KILLED );
+
+#if XASH_UWP
+	XBGore_Killed( this );
+#endif
 
 	// clear the deceased's sound channels.(may have been firing or reloading when killed)
 	EMIT_SOUND( ENT( pev ), CHAN_WEAPON, "common/null.wav", 1, ATTN_NORM );
@@ -1320,6 +1332,10 @@ void CBaseMonster::TraceAttack( entvars_t *pevAttacker, float flDamage, Vector v
 
 		SpawnBlood( ptr->vecEndPos, BloodColor(), flDamage );// a little surface blood.
 		TraceBleed( flDamage, vecDir, ptr, bitsDamageType );
+#if XASH_UWP
+		if( bitsDamageType & ( DMG_BULLET | DMG_SLASH | DMG_CLUB ))
+			XBGore_Wounded( this, ptr->vecEndPos, ptr->iHitgroup, flDamage );
+#endif
 		AddMultiDamage( pevAttacker, this, flDamage, bitsDamageType );
 	}
 }
@@ -1594,6 +1610,17 @@ void CBaseEntity::TraceBleed( float flDamage, Vector vecDir, TraceResult *ptr, i
 		cCount = 4;
 	}
 
+	float flBloodDist = 172.0f;
+#if XASH_UWP
+	// Extreme: more exit-wound splatter, thrown farther
+	if( XBGore_Extreme() )
+	{
+		cCount *= 3;
+		flNoise *= 1.5f;
+		flBloodDist = 320.0f;
+	}
+#endif
+
 	for( i = 0; i < cCount; i++ )
 	{
 		vecTraceDir = vecDir * -1.0f;// trace in the opposite direction the shot came from (the direction the shot is going)
@@ -1602,11 +1629,14 @@ void CBaseEntity::TraceBleed( float flDamage, Vector vecDir, TraceResult *ptr, i
 		vecTraceDir.y += RANDOM_FLOAT( -flNoise, flNoise );
 		vecTraceDir.z += RANDOM_FLOAT( -flNoise, flNoise );
 
-		UTIL_TraceLine( ptr->vecEndPos, ptr->vecEndPos + vecTraceDir * -172.0f, ignore_monsters, ENT( pev ), &Bloodtr );
+		UTIL_TraceLine( ptr->vecEndPos, ptr->vecEndPos + vecTraceDir * -flBloodDist, ignore_monsters, ENT( pev ), &Bloodtr );
 
 		if( Bloodtr.flFraction != 1.0f )
 		{
 			UTIL_BloodDecalTrace( &Bloodtr, BloodColor() );
+#if XASH_UWP
+			XBGore_SurfaceHit( &Bloodtr, BloodColor() );
+#endif
 		}
 	}
 }

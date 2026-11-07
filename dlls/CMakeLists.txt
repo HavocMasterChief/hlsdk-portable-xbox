@@ -140,6 +140,7 @@ set (SVDLL_SOURCES
 	tripmine.cpp
 	turret.cpp
 	util.cpp
+	xb_gore.cpp
 	vehicle.cpp
 	weapons.cpp
 	world.cpp

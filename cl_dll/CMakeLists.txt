@@ -120,6 +120,7 @@ set (CLDLL_SOURCES
 	tri.cpp
 	util.cpp
 	view.cpp
+	xb_gore_hud.cpp
 	../public/safe_snprintf.c
 )
 
