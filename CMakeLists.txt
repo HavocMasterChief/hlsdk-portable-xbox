@@ -225,7 +225,11 @@ add_subdirectory(game_shared)
 if(BUILD_CLIENT)
 	message(STATUS "Building client enabled")
 
-	add_subdirectory(freevgui)
+	if(CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
+		include(FreeVGUI_UWP) # no GDI in app containers
+	else()
+		add_subdirectory(freevgui)
+	endif()
 	add_subdirectory(cl_dll)
 endif()
 
