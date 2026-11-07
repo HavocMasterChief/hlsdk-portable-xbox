@@ -130,6 +130,9 @@ public:
 	void _cdecl UserCmd_Close( void );
 	void _cdecl UserCmd_NextWeapon( void );
 	void _cdecl UserCmd_PrevWeapon( void );
+#if XASH_UWP
+	WEAPON *XB_CurrentWeapon( void ) { return m_pWeapon; }
+#endif
 
 private:
 	float m_fFade;
@@ -212,6 +215,27 @@ private:
 };
 
 void XB_Rumble( float low, float high, int ms, float rightTrigger );
+
+// weapon wheel on LB, see xb_wheel.cpp
+class CHudXBWheel : public CHudBase
+{
+public:
+	int Init( void );
+	int VidInit( void );
+	int Draw( float flTime );
+	void Open( void );
+	void Close( bool select );
+	void Cycle( int dir );
+
+private:
+	bool SlotHasWeapons( int slot );
+	struct WEAPON *Shown( int slot );
+
+	bool m_bOpen;
+	int m_iSlot;
+	int m_iPos[8];
+	struct cvar_s *m_pOpen, *m_pStickX, *m_pStickY, *m_pSlowmo;
+};
 void XBRagdoll_Init( void );
 void XBRagdoll_Reset( void );
 struct cl_entity_s;
@@ -636,6 +660,7 @@ public:
 	CHudGeiger		m_Geiger;
 #if XASH_UWP
 	CHudXBGore		m_XBGore;
+	CHudXBWheel		m_XBWheel;
 #endif
 	CHudBattery		m_Battery;
 	CHudTrain		m_Train;

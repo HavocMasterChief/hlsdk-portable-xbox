@@ -378,6 +378,7 @@ void CHud::Init( void )
 	m_Geiger.Init();
 #if XASH_UWP
 	m_XBGore.Init();
+	m_XBWheel.Init();
 #endif
 	m_Train.Init();
 	m_Battery.Init();
@@ -574,6 +575,7 @@ void CHud::VidInit( void )
 	m_Geiger.VidInit();
 #if XASH_UWP
 	m_XBGore.VidInit();
+	m_XBWheel.VidInit();
 #endif
 	m_Train.VidInit();
 	m_Battery.VidInit();
