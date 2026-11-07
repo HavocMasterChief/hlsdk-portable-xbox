@@ -338,7 +338,7 @@ static void RD_Step( rdBody_t *b )
 		Vector vel = ( b->p[j] - b->o[j] ) * RD_DRAG;
 
 		b->o[j] = cur;
-		b->p[j] = cur + vel + Vector( 0, 0, -RD_GRAVITY * RD_STEP * RD_STEP );
+		b->p[j] = cur + vel + Vector( 0.0f, 0.0f, -RD_GRAVITY * RD_STEP * RD_STEP );
 	}
 
 	for( int it = 0; it < RD_ITER; it++ )
@@ -455,7 +455,7 @@ void XBRagdoll_Apply( cl_entity_t *ent, void *studiohdr, float (*bones)[MAXSTUDI
 		float dt = now - b->lastTime;
 
 		b->lastTime = now;
-		b->accum += bound( 0.0f, dt, 0.1f );
+		b->accum += dt < 0.0f ? 0.0f : ( dt > 0.1f ? 0.1f : dt );
 
 		if( b->accum >= RD_STEP )
 		{

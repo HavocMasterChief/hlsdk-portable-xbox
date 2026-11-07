@@ -28,7 +28,7 @@ class CBaseEntity;
 class CBaseMonster;
 
 void XBGore_SurfaceHit( TraceResult *tr, int color );   // a blood decal landed on a wall or ceiling
-void XBGore_Wounded( CBaseMonster *pMonster, const Vector &point, int hitgroup, float flDamage );
+void XBGore_Wounded( CBaseMonster *pMonster, const Vector &point, const Vector &shotDir, int hitgroup, float flDamage );
 void XBGore_Killed( CBaseMonster *pMonster );
 void XBGore_Gibbed( CBaseMonster *pMonster );
 void XBGore_Frame( void );               // from StartFrame
@@ -37,7 +37,8 @@ void XBGore_LevelStart( void );
 void XBRagdoll_Send( CBaseMonster *pMonster );   // body becomes a ragdoll (cl_dll/xb_ragdoll.cpp)
 
 extern int gmsgXBGore;
-extern int gmsgXBRagdoll;                   // screen splats (cl_dll/xb_gore_hud.cpp)
+extern int gmsgXBRagdoll;
+extern int gmsgXBDrops;                   // screen splats (cl_dll/xb_gore_hud.cpp)
 
 #endif // XASH_UWP
 #endif // XB_GORE_H

@@ -16,9 +16,11 @@ from the server so it works with any client.
            1  Default    stock blood, plus a pool spreading under bodies
            2  Green      as Default, human blood is alien coloured
            3  Extreme    always red, and:
-                - more and bigger wall splatter, thrown farther
-                - wounded enemies keep dripping; head hits spurt
-                - bodies pump blood for a few seconds after death
+                - blood droplets thrown on along the shot; each one
+                  leaves its splat where it lands (client side)
+                - wounded enemies keep dripping; now and then a head
+                  hit catches an artery and spurts
+                - some bodies pump blood for a moment after death
                 - splats on walls run down to the floor
                 - splats on ceilings drip, leaving spots on the floor
                 - blood on the screen when something dies or gibs close by
@@ -41,6 +43,39 @@ static cvar_t xb_blood = { "xb_blood", "1", FCVAR_ARCHIVE };
 
 int gmsgXBGore = 0;
 int gmsgXBRagdoll = 0;
+int gmsgXBDrops = 0;
+
+/*
+=============
+XB_SendDrops
+
+Blood droplets (cl_dll/xb_gore_hud.cpp): flung from point along dir with
+some spread, they fly under gravity, and wherever one lands it leaves its
+splat there. dir zero = every direction.
+=============
+*/
+#define XB_DROPS_SPHERE 1
+static void XB_SendDrops( const Vector &point, const Vector &dir, int count, float speed, float spread, int color, int flags = 0 )
+{
+	if( !gmsgXBDrops || count <= 0 || !UTIL_ShouldShowBlood( XBGore_Color( color )))
+		return;
+
+	Vector d = dir.Length() > 0.001f ? dir.Normalize() : Vector( 0, 0, 0 );
+
+	MESSAGE_BEGIN( MSG_PVS, gmsgXBDrops, point );
+		WRITE_COORD( point.x );
+		WRITE_COORD( point.y );
+		WRITE_COORD( point.z );
+		WRITE_CHAR( (int)( d.x * 127.0f ));
+		WRITE_CHAR( (int)( d.y * 127.0f ));
+		WRITE_CHAR( (int)( d.z * 127.0f ));
+		WRITE_BYTE( Q_min( count, 64 ));
+		WRITE_BYTE( (int)Q_min( speed * 0.25f, 255.0f ));
+		WRITE_BYTE( (int)Q_min( spread * 100.0f, 255.0f ));
+		WRITE_BYTE( XBGore_Color( color ) == BLOOD_COLOR_RED ? 0 : 1 );
+		WRITE_BYTE( flags );
+	MESSAGE_END();
+}
 
 #define MAX_POOLS     24
 #define MAX_RUNS      24
@@ -252,7 +287,7 @@ void XBGore_SurfaceHit( TraceResult *tr, int color )
 	}
 }
 
-void XBGore_Wounded( CBaseMonster *pMonster, const Vector &point, int hitgroup, float flDamage )
+void XBGore_Wounded( CBaseMonster *pMonster, const Vector &point, const Vector &shotDir, int hitgroup, float flDamage )
 {
 	int color = pMonster->BloodColor();
 
@@ -266,6 +301,12 @@ void XBGore_Wounded( CBaseMonster *pMonster, const Vector &point, int hitgroup, 
 	t->color = color;
 	t->ofs = point - pMonster->pev->origin;
 
+	// the exit spray: droplets thrown on along the bullet's path
+	if( XBGore_Extreme() )
+		XB_SendDrops( point, shotDir, (int)Q_min( 10.0f + flDamage * 0.35f, 40.0f ), RANDOM_FLOAT( 220.0f, 340.0f ), 0.35f, color );
+	else
+		XB_SendDrops( point, shotDir, (int)Q_min( 3.0f + flDamage * 0.1f, 10.0f ), RANDOM_FLOAT( 160.0f, 240.0f ), 0.3f, color );
+
 	if( !XBGore_Extreme() )
 		return;
 
@@ -273,13 +314,9 @@ void XBGore_Wounded( CBaseMonster *pMonster, const Vector &point, int hitgroup, 
 	{
 		t->bleedUntil = gpGlobals->time + 4.0f + flDamage * 0.05f;
 
-		if( hitgroup == HITGROUP_HEAD )
-			t->arteryUntil = gpGlobals->time + 1.5f;
-	}
-	else
-	{
-		// shooting a body re-opens the wound
-		t->pumpUntil = Q_max( t->pumpUntil, gpGlobals->time + 1.5f );
+		// only now and then: a head/neck hit that catches an artery
+		if( hitgroup == HITGROUP_HEAD && RANDOM_LONG( 0, 99 ) < 20 )
+			t->arteryUntil = gpGlobals->time + RANDOM_FLOAT( 0.8f, 1.4f );
 	}
 }
 
@@ -302,11 +339,13 @@ void XBGore_Killed( CBaseMonster *pMonster )
 		if( t->ofs == g_vecZero )
 			t->ofs = pMonster->Center() - pMonster->pev->origin;
 		t->bleedUntil = 0;
-		t->pumpUntil = gpGlobals->time + RANDOM_FLOAT( 2.5f, 4.0f );
-		t->pumpNext = gpGlobals->time + 0.3f;
-		// a head shot kill keeps spurting for a moment
-		if( pMonster->m_LastHitGroup == HITGROUP_HEAD )
-			t->arteryUntil = gpGlobals->time + 1.0f;
+		t->arteryUntil = 0;
+		// some bodies keep pumping for a moment, most just bleed out into the pool
+		if( RANDOM_LONG( 0, 99 ) < 30 )
+		{
+			t->pumpUntil = gpGlobals->time + RANDOM_FLOAT( 1.5f, 2.5f );
+			t->pumpNext = gpGlobals->time + 0.3f;
+		}
 	}
 
 	XB_ScreenSplat( pMonster, 140.0f, RANDOM_LONG( 2, 4 ));
@@ -321,8 +360,8 @@ void XBGore_Gibbed( CBaseMonster *pMonster )
 
 	Vector c = pMonster->Center();
 
-	for( int i = 0; i < 6; i++ )
-		UTIL_BloodStream( c, Vector( RANDOM_FLOAT( -1, 1 ), RANDOM_FLOAT( -1, 1 ), RANDOM_FLOAT( 0.2f, 1.0f )), color, RANDOM_LONG( 120, 200 ));
+	XB_SendDrops( c, g_vecZero, 64, 320.0f, 1.0f, color, XB_DROPS_SPHERE );
+	XB_SendDrops( c, g_vecZero, 40, 200.0f, 1.0f, color, XB_DROPS_SPHERE );
 
 	// throw splatter in every direction
 	for( int i = 0; i < 10; i++ )
@@ -433,8 +472,7 @@ static void XB_UpdateDrips( void )
 			continue;
 		}
 
-		UTIL_BloodDrips( d->point, Vector( 0, 0, -1 ), d->color, 6 );
-		XB_FloorDecal( d->point + Vector( RANDOM_FLOAT( -3, 3 ), RANDOM_FLOAT( -3, 3 ), 0 ), d->color, 512.0f );
+		XB_SendDrops( d->point, Vector( 0, 0, -1 ), 1, 0.0f, 0.05f, d->color );
 
 		// drips slow down as the blood runs out
 		float left = ( d->until - gpGlobals->time ) / 10.0f;
@@ -468,8 +506,8 @@ static void XB_UpdateTracked( void )
 		if( t->arteryUntil > gpGlobals->time && gpGlobals->time >= t->arteryNext )
 		{
 			Vector dir = Vector( RANDOM_FLOAT( -0.6f, 0.6f ), RANDOM_FLOAT( -0.6f, 0.6f ), RANDOM_FLOAT( 0.3f, 0.9f ));
-			UTIL_BloodStream( wound, dir, t->color, RANDOM_LONG( 90, 140 ));
-			t->arteryNext = gpGlobals->time + RANDOM_FLOAT( 0.12f, 0.2f );
+			XB_SendDrops( wound, dir, 6, RANDOM_FLOAT( 180.0f, 260.0f ), 0.15f, t->color );
+			t->arteryNext = gpGlobals->time + RANDOM_FLOAT( 0.18f, 0.3f );
 		}
 
 		// dead: the wound pumps, weaker as it goes
@@ -478,17 +516,15 @@ static void XB_UpdateTracked( void )
 			float left = ( t->pumpUntil - gpGlobals->time ) / 3.0f;
 			Vector dir = Vector( RANDOM_FLOAT( -0.4f, 0.4f ), RANDOM_FLOAT( -0.4f, 0.4f ), RANDOM_FLOAT( 0.4f, 1.0f ));
 
-			UTIL_BloodStream( wound, dir, t->color, (int)( 40 + 80 * Q_min( left, 1.0f )));
-			t->pumpNext = gpGlobals->time + RANDOM_FLOAT( 0.25f, 0.45f );
+			XB_SendDrops( wound, dir, (int)( 2 + 4 * Q_min( left, 1.0f )), 60.0f + 100.0f * Q_min( left, 1.0f ), 0.25f, t->color );
+			t->pumpNext = gpGlobals->time + RANDOM_FLOAT( 0.3f, 0.5f );
 		}
 
 		// wounded and alive: drips as they move
 		if( t->bleedUntil > gpGlobals->time && gpGlobals->time >= t->bleedNext && e->v.health > 0 )
 		{
-			UTIL_BloodDrips( wound, Vector( 0, 0, -1 ), t->color, 4 );
-			if( RANDOM_LONG( 0, 2 ) == 0 )
-				XB_FloorDecal( wound, t->color );
-			t->bleedNext = gpGlobals->time + RANDOM_FLOAT( 0.3f, 0.6f );
+			XB_SendDrops( wound, Vector( 0, 0, -1 ), 1, 10.0f, 0.2f, t->color );
+			t->bleedNext = gpGlobals->time + RANDOM_FLOAT( 0.35f, 0.7f );
 		}
 	}
 }

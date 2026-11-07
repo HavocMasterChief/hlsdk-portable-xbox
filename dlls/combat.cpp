@@ -1337,7 +1337,7 @@ void CBaseMonster::TraceAttack( entvars_t *pevAttacker, float flDamage, Vector v
 		TraceBleed( flDamage, vecDir, ptr, bitsDamageType );
 #if XASH_UWP
 		if( bitsDamageType & ( DMG_BULLET | DMG_SLASH | DMG_CLUB ))
-			XBGore_Wounded( this, ptr->vecEndPos, ptr->iHitgroup, flDamage );
+			XBGore_Wounded( this, ptr->vecEndPos, vecDir, ptr->iHitgroup, flDamage );
 #endif
 		AddMultiDamage( pevAttacker, this, flDamage, bitsDamageType );
 	}
@@ -1615,13 +1615,10 @@ void CBaseEntity::TraceBleed( float flDamage, Vector vecDir, TraceResult *ptr, i
 
 	float flBloodDist = 172.0f;
 #if XASH_UWP
-	// Extreme: more exit-wound splatter, thrown farther
+	// Extreme: exit-wound splatter reaches a bit farther; the extra blood
+	// comes from droplets that fly and land (XBGore_Wounded, client side)
 	if( XBGore_Extreme() )
-	{
-		cCount *= 3;
-		flNoise *= 1.5f;
-		flBloodDist = 320.0f;
-	}
+		flBloodDist = 240.0f;
 #endif
 
 	for( i = 0; i < cCount; i++ )

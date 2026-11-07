@@ -19,14 +19,128 @@ Red only, like RTCW (Extreme is always red).
 #include "parsemsg.h"
 #include "triangleapi.h"
 #include "com_model.h"
+#include "r_efx.h"
+#include "pm_defs.h"
+#include "event_api.h"
 
 #if XASH_UWP
+
+/*
+===============================================================================
+
+Blood droplets (RealRTCWX CG_GoreSpray / CG_GoreDropLand)
+
+The server sends "XBDrops" (dlls/xb_gore.cpp): a point, a direction (the
+way the bullet was travelling, so blood is thrown out the far side), a
+count, speed and spread. Each droplet is a small blood sprite that flies
+under gravity; when it hits the world it leaves its own splat right there
+and disappears. Bigger drops leave splats, the fine mist doesn't.
+
+===============================================================================
+*/
+static struct model_s *s_dropModel;
+static int s_dropDecals[2][6];   // red, yellow
+
+static void XB_DropHit( struct tempent_s *te, struct pmtrace_s *ptr )
+{
+	// a drop is gone once it lands
+	te->die = gEngfuncs.GetClientTime();
+	te->entity.curstate.renderamt = 0;
+	te->flags &= ~( FTENT_COLLIDEWORLD | FTENT_GRAVITY );
+
+	// fuser1 marks drops big enough to leave a splat, iuser1 the colour
+	if( te->entity.curstate.fuser1 <= 0.0f || !ptr )
+		return;
+
+	int set = te->entity.curstate.iuser1 ? 1 : 0;
+	int decal = s_dropDecals[set][gEngfuncs.pfnRandomLong( 0, 5 )];
+
+	if( decal <= 0 )
+		return;
+
+	int ent = gEngfuncs.pEventAPI->EV_IndexFromTrace( ptr );
+	gEngfuncs.pEfxAPI->R_DecalShoot( gEngfuncs.pEfxAPI->Draw_DecalIndex( decal ), ent, 0, ptr->endpos, 0 );
+}
+
+static int MsgFunc_XBDrops( const char *pszName, int iSize, void *pbuf )
+{
+	BEGIN_READ( pbuf, iSize );
+	Vector org, dir;
+	org.x = READ_COORD();
+	org.y = READ_COORD();
+	org.z = READ_COORD();
+	dir.x = READ_CHAR() / 127.0f;
+	dir.y = READ_CHAR() / 127.0f;
+	dir.z = READ_CHAR() / 127.0f;
+	int count = READ_BYTE();
+	float speed = READ_BYTE() * 4.0f;
+	float spread = READ_BYTE() / 100.0f;
+	int yellow = READ_BYTE();
+	int flags = READ_BYTE();
+
+	if( !s_dropModel )
+		return 1;
+
+	bool sphere = ( flags & 1 ) || dir.Length() < 0.01f;
+
+	for( int i = 0; i < count; i++ )
+	{
+		Vector d;
+
+		if( sphere )
+			d = Vector( gEngfuncs.pfnRandomFloat( -1, 1 ), gEngfuncs.pfnRandomFloat( -1, 1 ), gEngfuncs.pfnRandomFloat( -0.3f, 1.0f ));
+		else
+			d = dir + Vector( gEngfuncs.pfnRandomFloat( -spread, spread ), gEngfuncs.pfnRandomFloat( -spread, spread ), gEngfuncs.pfnRandomFloat( -spread, spread ));
+
+		d = d.Normalize();
+
+		// mix of heavy drops that carry and fine mist that falls short
+		float big = gEngfuncs.pfnRandomFloat( 0.0f, 1.0f );
+		float v = speed * ( 0.45f + 0.75f * gEngfuncs.pfnRandomFloat( 0.0f, 1.0f ));
+
+		TEMPENTITY *te = gEngfuncs.pEfxAPI->CL_TempEntAlloc( org, s_dropModel );
+		if( !te )
+			break;
+
+		te->entity.baseline.origin = d * v;   // tempent velocity
+		te->entity.curstate.rendermode = kRenderTransAlpha;
+		te->entity.curstate.renderamt = 230;
+		te->entity.curstate.rendercolor.r = yellow ? 160 : 110;
+		te->entity.curstate.rendercolor.g = yellow ? 140 : 0;
+		te->entity.curstate.rendercolor.b = 0;
+		te->entity.curstate.scale = 0.06f + 0.12f * big;
+		te->entity.curstate.fuser1 = big > 0.45f ? 1.0f : 0.0f;
+		te->entity.curstate.iuser1 = yellow;
+		te->entity.curstate.frame = gEngfuncs.pfnRandomLong( 0, 3 );
+		te->flags |= FTENT_COLLIDEWORLD | FTENT_GRAVITY | FTENT_COLLIDEKILL;
+		te->hitcallback = XB_DropHit;
+		te->die = gEngfuncs.GetClientTime() + 4.0f;
+	}
+
+	return 1;
+}
+
+static void XB_DropsVidInit( void )
+{
+	static const char *red[6] = { "{blood1", "{blood2", "{blood3", "{blood4", "{blood5", "{blood6" };
+	static const char *yel[6] = { "{yblood1", "{yblood2", "{yblood3", "{yblood4", "{yblood5", "{yblood6" };
+	int idx = 0;
+
+	s_dropModel = gEngfuncs.CL_LoadModel( "sprites/blood.spr", &idx );
+
+	for( int i = 0; i < 6; i++ )
+	{
+		s_dropDecals[0][i] = gEngfuncs.pEfxAPI->Draw_DecalIndexFromName( (char *)red[i] );
+		s_dropDecals[1][i] = gEngfuncs.pEfxAPI->Draw_DecalIndexFromName( (char *)yel[i] );
+	}
+}
 
 DECLARE_MESSAGE( m_XBGore, XBGore )
 
 int CHudXBGore::Init( void )
 {
 	HOOK_MESSAGE( XBGore );
+	gEngfuncs.pfnHookUserMsg( "XBDrops", MsgFunc_XBDrops );
 	XBRagdoll_Init();
 
 	memset( m_splats, 0, sizeof( m_splats ));
@@ -40,6 +154,7 @@ int CHudXBGore::VidInit( void )
 {
 	m_hSprite = SPR_Load( "sprites/bloodspray.spr" );
 	XBRagdoll_Reset();
+	XB_DropsVidInit();
 	memset( m_splats, 0, sizeof( m_splats ));
 	return 1;
 }
