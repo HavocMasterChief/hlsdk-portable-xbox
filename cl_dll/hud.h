@@ -212,6 +212,10 @@ private:
 };
 
 void XB_Rumble( float low, float high, int ms, float rightTrigger );
+void XBRagdoll_Init( void );
+void XBRagdoll_Reset( void );
+struct cl_entity_s;
+void XBRagdoll_Apply( struct cl_entity_s *ent, void *studiohdr, float (*bones)[128][3][4], float (*lights)[128][3][4] );
 #endif
 
 //

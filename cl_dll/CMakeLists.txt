@@ -121,6 +121,7 @@ set (CLDLL_SOURCES
 	util.cpp
 	view.cpp
 	xb_gore_hud.cpp
+	xb_ragdoll.cpp
 	../public/safe_snprintf.c
 )
 

@@ -27,6 +27,7 @@ DECLARE_MESSAGE( m_XBGore, XBGore )
 int CHudXBGore::Init( void )
 {
 	HOOK_MESSAGE( XBGore );
+	XBRagdoll_Init();
 
 	memset( m_splats, 0, sizeof( m_splats ));
 	m_iFlags = 0;
@@ -38,6 +39,7 @@ int CHudXBGore::Init( void )
 int CHudXBGore::VidInit( void )
 {
 	m_hSprite = SPR_Load( "sprites/bloodspray.spr" );
+	XBRagdoll_Reset();
 	memset( m_splats, 0, sizeof( m_splats ));
 	return 1;
 }

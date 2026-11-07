@@ -227,6 +227,7 @@ void LinkUserMessages( void )
 	gmsgShake = REG_USER_MSG( "ScreenShake", sizeof(ScreenShake) );
 #if XASH_UWP
 	gmsgXBGore = REG_USER_MSG( "XBGore", 1 );
+	gmsgXBRagdoll = REG_USER_MSG( "XBRagdoll", -1 );
 #endif
 	gmsgFade = REG_USER_MSG( "ScreenFade", sizeof(ScreenFade) );
 	gmsgAmmoX = REG_USER_MSG( "AmmoX", 2 );

@@ -607,6 +607,9 @@ void CBaseMonster::Killed( entvars_t *pevAttacker, int iGib )
 	{
 		SetTouch( NULL );
 		BecomeDead();
+#if XASH_UWP
+		XBRagdoll_Send( this );
+#endif
 	}
 
 	// don't let the status bar glitch for players.with <0 health.

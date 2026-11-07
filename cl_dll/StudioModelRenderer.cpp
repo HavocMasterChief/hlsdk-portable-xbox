@@ -966,6 +966,12 @@ void CStudioModelRenderer::StudioSetupBones( void )
 			ConcatTransforms( (*m_plighttransform)[pbones[i].parent], bonematrix, (*m_plighttransform)[i] );
 		}
 	}
+
+#if XASH_UWP
+	// ragdoll deaths replace the animated pose (xb_ragdoll.cpp)
+	if( IEngineStudio.IsHardware() )
+		XBRagdoll_Apply( m_pCurrentEntity, m_pStudioHeader, m_pbonetransform, m_plighttransform );
+#endif
 }
 
 /*

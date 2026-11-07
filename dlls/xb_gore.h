@@ -34,7 +34,10 @@ void XBGore_Gibbed( CBaseMonster *pMonster );
 void XBGore_Frame( void );               // from StartFrame
 void XBGore_LevelStart( void );
 
-extern int gmsgXBGore;                   // screen splats (cl_dll/xb_gore_hud.cpp)
+void XBRagdoll_Send( CBaseMonster *pMonster );   // body becomes a ragdoll (cl_dll/xb_ragdoll.cpp)
+
+extern int gmsgXBGore;
+extern int gmsgXBRagdoll;                   // screen splats (cl_dll/xb_gore_hud.cpp)
 
 #endif // XASH_UWP
 #endif // XB_GORE_H

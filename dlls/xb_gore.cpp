@@ -40,6 +40,7 @@ when a list is full, the oldest effect is replaced.
 static cvar_t xb_blood = { "xb_blood", "1", FCVAR_ARCHIVE };
 
 int gmsgXBGore = 0;
+int gmsgXBRagdoll = 0;
 
 #define MAX_POOLS     24
 #define MAX_RUNS      24
@@ -512,6 +513,38 @@ void XBGore_Frame( void )
 	XB_UpdateRuns();
 	XB_UpdateDrips();
 	XB_UpdateTracked();
+}
+
+/*
+=============
+XBRagdoll_Send
+
+The client turns the body into a ragdoll if its model has the Bip01
+skeleton; others keep their death animation. Pushed away from the attacker.
+=============
+*/
+void XBRagdoll_Send( CBaseMonster *pMonster )
+{
+	if( !gmsgXBRagdoll || !pMonster )
+		return;
+
+	// g_vecAttackDir points from the victim toward whatever hurt it
+	Vector push = -g_vecAttackDir;
+	if( push == g_vecZero )
+		push = Vector( 0, 0, 1 );
+	push.z += 0.25f;
+
+	int force = (int)( 120 + pMonster->m_lastDamageAmount * 5.0f );
+	if( force > 255 ) force = 255;
+
+	MESSAGE_BEGIN( MSG_ALL, gmsgXBRagdoll );
+		WRITE_SHORT( pMonster->entindex() );
+		WRITE_COORD( push.x * 100.0f );
+		WRITE_COORD( push.y * 100.0f );
+		WRITE_COORD( push.z * 100.0f );
+		WRITE_BYTE( force );
+		WRITE_BYTE( pMonster->m_LastHitGroup );
+	MESSAGE_END();
 }
 
 #endif // XASH_UWP
