@@ -4975,3 +4975,110 @@ void CInfoIntermission::Think( void )
 }
 
 LINK_ENTITY_TO_CLASS( info_intermission, CInfoIntermission )
+
+#if XASH_UWP
+/*
+=============
+CBasePlayer::XBKick
+
+A boot to whatever is in front of you, after RealRTCWX's kick: hurts and
+shoves monsters, smashes crates, knocks open doors you could open with Use
+and shoves pushables. Bound to the right stick click.
+=============
+*/
+void FindHullIntersection( const Vector &vecSrc, TraceResult &tr, float *mins, float *maxs, edict_t *pEntity ); // crowbar.cpp
+
+#define XB_KICK_RANGE	56.0f
+#define XB_KICK_DAMAGE	20.0f
+#define XB_KICK_DELAY	0.75f
+
+void CBasePlayer::XBKick( void )
+{
+	if( !IsAlive() || pev->deadflag != DEAD_NO || ( pev->flags & FL_FROZEN ) || pev->waterlevel >= 3 )
+		return;
+
+	if( m_flXBNextKick > gpGlobals->time && m_flXBNextKick - gpGlobals->time < 5.0f )
+		return;
+	m_flXBNextKick = gpGlobals->time + XB_KICK_DELAY;
+
+	UTIL_MakeVectors( pev->v_angle );
+
+	// from about knee height upward along the aim, like a front kick
+	Vector vecSrc = GetGunPosition();
+	Vector vecEnd = vecSrc + gpGlobals->v_forward * XB_KICK_RANGE;
+	TraceResult tr;
+
+	UTIL_TraceLine( vecSrc, vecEnd, dont_ignore_monsters, ENT( pev ), &tr );
+	if( tr.flFraction >= 1.0f )
+	{
+		// nothing at eye level: try lower, where a foot actually goes
+		Vector vecLow = vecSrc - Vector( 0, 0, ( pev->flags & FL_DUCKING ) ? 8.0f : 28.0f );
+		UTIL_TraceHull( vecLow, vecLow + gpGlobals->v_forward * XB_KICK_RANGE, dont_ignore_monsters, head_hull, ENT( pev ), &tr );
+		if( tr.flFraction < 1.0f && tr.pHit )
+		{
+			CBaseEntity *pHit = CBaseEntity::Instance( tr.pHit );
+			if( !pHit || pHit->IsBSPModel() )
+				FindHullIntersection( vecLow, tr, VEC_DUCK_HULL_MIN, VEC_DUCK_HULL_MAX, edict());
+		}
+	}
+
+	// the leg swinging forward
+	pev->punchangle.x = -3.0f;
+	SetAnimation( PLAYER_ATTACK1 );
+
+	if( tr.flFraction >= 1.0f || !tr.pHit )
+	{
+		EMIT_SOUND_DYN( ENT( pev ), CHAN_ITEM, "weapons/cbar_miss1.wav", 1, ATTN_NORM, 0, 80 + RANDOM_LONG( 0, 10 ));
+		return;
+	}
+
+	CBaseEntity *pEntity = CBaseEntity::Instance( tr.pHit );
+	m_iWeaponVolume = 256;
+
+	if( pEntity )
+	{
+		ClearMultiDamage();
+		pEntity->TraceAttack( pev, XB_KICK_DAMAGE, gpGlobals->v_forward, &tr, DMG_CLUB );
+		ApplyMultiDamage( pev, pev );
+
+		// shove it away from us
+		Vector vecPush = gpGlobals->v_forward;
+		vecPush.z = 0;
+		vecPush = vecPush.Normalize();
+
+		if( pEntity->MyMonsterPointer() && pEntity->IsAlive() )
+		{
+			// little things go flying, big things stagger
+			float flScale = ( pEntity->pev->size.z < 40.0f ) ? 420.0f : 180.0f;
+			if( pEntity->pev->movetype == MOVETYPE_STEP || pEntity->pev->movetype == MOVETYPE_WALK || pEntity->pev->movetype == MOVETYPE_TOSS )
+			{
+				pEntity->pev->flags &= ~FL_ONGROUND;
+				pEntity->pev->origin.z += 1.0f;
+				pEntity->pev->velocity = pEntity->pev->velocity + vecPush * flScale + Vector( 0, 0, flScale * 0.4f );
+			}
+		}
+		else if( FClassnameIs( pEntity->pev, "func_pushable" ))
+		{
+			pEntity->pev->velocity = pEntity->pev->velocity + vecPush * 200.0f;
+		}
+		else if( FClassnameIs( pEntity->pev, "func_door" ) || FClassnameIs( pEntity->pev, "func_door_rotating" ))
+		{
+			// only doors the player could open with Use anyway, so scripted doors stay shut
+			if( pEntity->ObjectCaps() & ( FCAP_IMPULSE_USE | FCAP_CONTINUOUS_USE | FCAP_ONOFF_USE ))
+				pEntity->Use( this, this, USE_TOGGLE, 1 );
+		}
+
+		if( pEntity->Classify() != CLASS_NONE && pEntity->Classify() != CLASS_MACHINE )
+		{
+			EMIT_SOUND_DYN( ENT( pev ), CHAN_ITEM, RANDOM_LONG( 0, 1 ) ? "weapons/cbar_hitbod1.wav" : "weapons/cbar_hitbod2.wav", 1, ATTN_NORM, 0, 90 + RANDOM_LONG( 0, 10 ));
+			pev->punchangle.x = -5.0f;
+			return;
+		}
+	}
+
+	// world, wall or crate
+	TEXTURETYPE_PlaySound( &tr, vecSrc, vecSrc + ( vecEnd - vecSrc ) * 2, BULLET_PLAYER_CROWBAR );
+	EMIT_SOUND_DYN( ENT( pev ), CHAN_ITEM, "weapons/cbar_hit1.wav", 0.8, ATTN_NORM, 0, 85 + RANDOM_LONG( 0, 10 ));
+	pev->punchangle.x = -5.0f;
+}
+#endif

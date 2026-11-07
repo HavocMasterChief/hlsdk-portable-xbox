@@ -252,6 +252,10 @@ public:
 
 	// custom player functions
 	virtual void ImpulseCommands( void );
+#if XASH_UWP
+	void XBKick( void );	// right stick click, like RealRTCWX
+	float m_flXBNextKick;
+#endif
 	void CheatImpulseCommands( int iImpulse );
 
 	void StartDeathCam( void );

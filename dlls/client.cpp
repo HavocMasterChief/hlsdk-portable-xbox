@@ -486,6 +486,12 @@ void ClientCommand( edict_t *pEntity )
 	{
 		Host_Say( pEntity, 1 );
 	}
+#if XASH_UWP
+	else if( FStrEq( pcmd, "xbkick" ) )
+	{
+		GetClassPtr( (CBasePlayer *)pev )->XBKick();
+	}
+#endif
 	else if( FStrEq( pcmd, "fullupdate" ) )
 	{
 		GetClassPtr( (CBasePlayer *)pev )->ForceClientDllUpdate(); 
