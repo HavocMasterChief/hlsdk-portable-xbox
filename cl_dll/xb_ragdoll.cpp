@@ -26,6 +26,8 @@ Monsters without the Bip01 joints (aliens, headcrabs...) keep their
 normal death animation.
 */
 
+#include <ctype.h>
+#include <string.h>
 #include "hud.h"
 #include "cl_util.h"
 #include "parsemsg.h"
@@ -66,25 +68,47 @@ enum
 	J_NUM
 };
 
-// bone names per joint, first match wins
-static const char *s_jointBones[J_NUM][3] =
+// bone names per joint, first match wins. Compared without the "Bip01 " prefix,
+// case and '_' ignored. Valve's 1998 models use Character Studio's old names
+// (L Arm1 = upper arm, L Arm2 = forearm, L Leg = thigh, L Leg1 = calf),
+// newer and HD models the current ones.
+#define RD_NAMES 5
+static const char *s_jointBones[J_NUM][RD_NAMES] =
 {
-	{ "Bip01 Pelvis", NULL, NULL },
-	{ "Bip01 Spine2", "Bip01 Spine3", "Bip01 Spine1" },
-	{ "Bip01 Head", NULL, NULL },
-	{ "Bip01 L UpperArm", NULL, NULL },
-	{ "Bip01 L Forearm", NULL, NULL },
-	{ "Bip01 L Hand", NULL, NULL },
-	{ "Bip01 R UpperArm", NULL, NULL },
-	{ "Bip01 R Forearm", NULL, NULL },
-	{ "Bip01 R Hand", NULL, NULL },
-	{ "Bip01 L Thigh", NULL, NULL },
-	{ "Bip01 L Calf", NULL, NULL },
-	{ "Bip01 L Foot", NULL, NULL },
-	{ "Bip01 R Thigh", NULL, NULL },
-	{ "Bip01 R Calf", NULL, NULL },
-	{ "Bip01 R Foot", NULL, NULL },
+	{ "pelvis", "", NULL },                     // "" = the "Bip01" root itself
+	{ "spine2", "spine3", "spine1", "neck", "spine" },
+	{ "head", NULL },
+	{ "l upperarm", "l arm1", NULL },
+	{ "l forearm", "l arm2", NULL },
+	{ "l hand", NULL },
+	{ "r upperarm", "r arm1", NULL },
+	{ "r forearm", "r arm2", NULL },
+	{ "r hand", NULL },
+	{ "l thigh", "l leg", NULL },
+	{ "l calf", "l leg1", NULL },
+	{ "l foot", NULL },
+	{ "r thigh", "r leg", NULL },
+	{ "r calf", "r leg1", NULL },
+	{ "r foot", NULL },
 };
+
+// "Bip01 L Arm1" -> "l arm1"; anything not on a biped -> NULL
+static const char *RD_BoneKey( const char *name, char *out, size_t size )
+{
+	size_t n = 0;
+
+	for( const char *c = name; *c && n + 1 < size; c++ )
+		out[n++] = ( *c == '_' ) ? ' ' : (char)tolower( (unsigned char)*c );
+	out[n] = 0;
+
+	if( strncmp( out, "bip0", 4 ) || !isdigit( (unsigned char)out[4] ))
+		return NULL;
+
+	const char *k = out + 5;
+	while( *k == ' ' )
+		k++;
+	return k;
+}
 
 // rigid parts: origin joint, axis joint, reference joint for the twist
 enum { S_PELVIS, S_CHEST, S_LUARM, S_LFARM, S_RUARM, S_RFARM, S_LTHIGH, S_LCALF, S_RTHIGH, S_RCALF, S_NUM };
@@ -247,14 +271,28 @@ static bool RD_Start( rdBody_t *b, cl_entity_t *ent, studiohdr_t *hdr, float (*b
 
 	b->numbones = hdr->numbones;
 
+	char keys[MAXSTUDIOBONES][32];
+	const char *key[MAXSTUDIOBONES];
+
+	for( int i = 0; i < hdr->numbones && i < MAXSTUDIOBONES; i++ )
+		key[i] = RD_BoneKey( pbones[i].name, keys[i], sizeof( keys[i] ));
+
 	for( int j = 0; j < J_NUM; j++ )
 	{
 		b->jointBone[j] = -1;
-		for( int n = 0; n < 3 && s_jointBones[j][n] && b->jointBone[j] < 0; n++ )
+		for( int n = 0; n < RD_NAMES && s_jointBones[j][n] && b->jointBone[j] < 0; n++ )
 		{
 			for( int i = 0; i < hdr->numbones; i++ )
 			{
-				if( !_stricmp( pbones[i].name, s_jointBones[j][n] ))
+				if( !key[i] || strcmp( key[i], s_jointBones[j][n] ))
+					continue;
+
+				// one bone can't be two joints (a model with no pelvis but a "spine")
+				bool taken = false;
+				for( int k = 0; k < j; k++ )
+					if( b->jointBone[k] == i ) taken = true;
+
+				if( !taken )
 				{
 					b->jointBone[j] = i;
 					break;
@@ -264,7 +302,23 @@ static bool RD_Start( rdBody_t *b, cl_entity_t *ent, studiohdr_t *hdr, float (*b
 
 		if( b->jointBone[j] < 0 )
 		{
+			static model_t *s_reported[16];
+			bool reported = false;
+
+			for( int r = 0; r < 16; r++ )
+			{
+				if( s_reported[r] == ent->model ) { reported = true; break; }
+				if( !s_reported[r] ) { s_reported[r] = ent->model; break; }
+			}
+
 			gEngfuncs.Con_DPrintf( "ragdoll: ent %d (%s) has no %s bone, keeps its death animation\n", ent->index, ent->model ? ent->model->name : "?", s_jointBones[j][0] );
+
+			// once per model, list its skeleton so the names can be added
+			if( !reported )
+			{
+				for( int i = 0; i < hdr->numbones; i++ )
+					gEngfuncs.Con_DPrintf( "ragdoll:   bone %d \"%s\" parent %d\n", i, pbones[i].name, pbones[i].parent );
+			}
 			return false; // not a human skeleton
 		}
 	}

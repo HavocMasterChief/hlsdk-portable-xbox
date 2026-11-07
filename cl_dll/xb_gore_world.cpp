@@ -98,8 +98,17 @@ static float RandF( float a, float b ) { return gEngfuncs.pfnRandomFloat( a, b )
 
 static model_s *XB_LoadSprite( const char *name )
 {
+	// world sprites only come back if the server precached them (dlls/weapons.cpp),
+	// otherwise load it as a HUD sprite, which needs no precache
 	int idx = 0;
-	return gEngfuncs.CL_LoadModel( name, &idx );
+	model_s *m = gEngfuncs.CL_LoadModel( name, &idx );
+	if( !m )
+	{
+		HSPRITE h = SPR_Load( name );
+		if( h )
+			m = (model_s *)gEngfuncs.GetSpritePointer( h );
+	}
+	return m;
 }
 
 /*

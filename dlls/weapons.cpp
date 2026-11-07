@@ -365,6 +365,13 @@ void W_Precache( void )
 	g_sModelIndexSmoke = PRECACHE_MODEL( "sprites/steam1.spr" );// smoke
 	g_sModelIndexBubbles = PRECACHE_MODEL( "sprites/bubble.spr" );//bubbles
 	g_sModelIndexBloodSpray = PRECACHE_MODEL( "sprites/bloodspray.spr" ); // initial blood
+#if XASH_UWP
+	// Xbox gore: client droplets, splats, pools and footprints (cl_dll/xb_gore_world.cpp)
+	PRECACHE_MODEL( "sprites/xb_splat.spr" );
+	PRECACHE_MODEL( "sprites/xb_drop.spr" );
+	PRECACHE_MODEL( "sprites/xb_pool.spr" );
+	PRECACHE_MODEL( "sprites/xb_foot.spr" );
+#endif
 	g_sModelIndexBloodDrop = PRECACHE_MODEL( "sprites/blood.spr" ); // splattered blood 
 
 	g_sModelIndexLaser = PRECACHE_MODEL( g_pModelNameLaser );
