@@ -178,7 +178,7 @@ endif()
 
 target_link_libraries(${CLDLL_LIBRARY} vgui)
 
-if(WIN32)
+if(WIN32 AND NOT WINDOWS_STORE)
 	target_link_libraries( ${CLDLL_LIBRARY} user32.lib )
 	if (GOLDSOURCE_SUPPORT)
 		target_link_libraries( ${CLDLL_LIBRARY} winmm.lib )

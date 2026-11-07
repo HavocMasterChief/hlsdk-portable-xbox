@@ -25,8 +25,13 @@ cmake_minimum_required(VERSION 3.9)
 
 if(NOT ${CMAKE_VERSION} VERSION_LESS "3.15.0")
 	cmake_policy(SET CMP0091 NEW)
-	# use the static CRT for all targets
-	set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+	if(CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
+		# Xbox / UWP: app container builds must use the dynamic (store) CRT
+		set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+	else()
+		# use the static CRT for all targets
+		set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+	endif()
 endif()
 
 # Install custom module path
@@ -39,6 +44,11 @@ include(VSForceXPToolchain) # Force XP toolchain for Visual Studio
 include(CheckIPOSupported)
 
 project (HLSDK-PORTABLE)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
+	# Xbox Series Dev Mode (UWP) build
+	add_compile_definitions(XASH_UWP=1 _CRT_SECURE_NO_WARNINGS)
+endif()
 
 #--------------
 # USER DEFINES \
