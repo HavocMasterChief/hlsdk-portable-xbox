@@ -178,10 +178,10 @@ static void XB_AddFoot( const Vector &org, const Vector &normal, const Vector &f
 	XB_PlaneAxes( normal, forward, right, up );
 
 	m->used = true;
-	m->org = org + right * ( left ? -5.0f : 5.0f ) + normal * 0.35f;
+	m->org = org + right * ( left ? -4.0f : 4.0f ) + normal * 0.35f;
 	m->normal = normal;
-	m->right = right * 5.0f;
-	m->up = up * -10.0f;          // sprite's toe is at the top
+	m->right = right * 3.6f;      // a boot is about 7 x 18 units, the sprite is 32 x 80
+	m->up = up * -9.0f;           // sprite's toe is at the top
 	m->born = s_lastTime;
 	m->alpha = alpha;
 	m->frame = left ? 0 : 1;
