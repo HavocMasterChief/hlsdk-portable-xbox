@@ -38,6 +38,7 @@ int CHudXBGore::Init( void )
 
 	XBGoreWorld_Init();
 	XBRagdoll_Init();
+	XBLeg_Init();
 
 	memset( m_splats, 0, sizeof( m_splats ));
 	m_iFlags = 0;
@@ -50,6 +51,7 @@ int CHudXBGore::VidInit( void )
 {
 	m_hSprite = SPR_Load( "sprites/bloodspray.spr" );
 	XBRagdoll_Reset();
+	XBLeg_VidInit();
 	XBGoreWorld_VidInit();
 	memset( m_splats, 0, sizeof( m_splats ));
 	return 1;

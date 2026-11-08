@@ -141,6 +141,8 @@ set (SVDLL_SOURCES
 	turret.cpp
 	util.cpp
 	xb_gore.cpp
+	xb_ragdoll_sv.cpp
+	../game_shared/xb_rdphys.cpp
 	vehicle.cpp
 	weapons.cpp
 	world.cpp

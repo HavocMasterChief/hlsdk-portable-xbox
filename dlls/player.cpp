@@ -4989,7 +4989,7 @@ and shoves pushables. Bound to the right stick click.
 void FindHullIntersection( const Vector &vecSrc, TraceResult &tr, float *mins, float *maxs, edict_t *pEntity ); // crowbar.cpp
 
 #define XB_KICK_RANGE	56.0f
-#define XB_KICK_DAMAGE	20.0f
+#define XB_KICK_DAMAGE	gSkillData.plrDmg9MM	// same as one pistol bullet
 #define XB_KICK_DELAY	0.75f
 
 void CBasePlayer::XBKick( void )

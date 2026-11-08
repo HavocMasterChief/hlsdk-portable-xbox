@@ -78,6 +78,19 @@ struct xbPool_t
 	bool yellow;
 };
 
+// a drop that hits a wall sometimes runs down it
+#define MAX_RUNS    64
+struct xbRun_t
+{
+	bool used, done;
+	Vector top, head, dir, normal;
+	float speed, width, len, maxLen, born, wobble;
+	bool yellow;
+};
+static xbRun_t s_runs[MAX_RUNS];
+static void XB_Light( const Vector &org, float rgb[3], bool yellow );
+static int s_nextRun;
+
 static xbDrop_t s_drops[MAX_DROPS];
 static xbMark_t s_splats[MAX_SPLATS];
 static xbMark_t s_feet[MAX_FEET];
@@ -232,6 +245,30 @@ static void XB_NewDrop( const Vector &pos, const Vector &vel, float size, bool y
 	d->yellow = yellow;
 }
 
+static void XB_AddRun( const Vector &org, const Vector &n, float size, bool yellow )
+{
+	// straight down along the wall
+	Vector down = Vector( 0.0f, 0.0f, -1.0f );
+	Vector dir = down - n * DotProduct( down, n );
+	if( dir.Length() < 0.3f )
+		return;
+
+	xbRun_t *r = &s_runs[s_nextRun];
+	s_nextRun = ( s_nextRun + 1 ) % MAX_RUNS;
+
+	memset( r, 0, sizeof( *r ));
+	r->used = true;
+	r->top = r->head = org + n * 0.45f;
+	r->dir = dir.Normalize();
+	r->normal = n;
+	r->speed = RandF( 14.0f, 26.0f ) * ( 0.7f + size * 0.3f );
+	r->width = Q_min( 0.6f + size * 0.55f, 2.2f );
+	r->maxLen = RandF( 10.0f, 40.0f ) * ( 0.7f + size * 0.3f );
+	r->born = s_lastTime;
+	r->wobble = RandF( 0.0f, 6.28f );
+	r->yellow = yellow;
+}
+
 static void XB_DropLand( xbDrop_t *d, pmtrace_t *tr )
 {
 	Vector n = Vector( tr->plane.normal );
@@ -240,6 +277,82 @@ static void XB_DropLand( xbDrop_t *d, pmtrace_t *tr )
 	float stretch = 1.0f + Q_min( speed / 500.0f, 1.6f ) * ( 1.0f - fabs( DotProduct( d->vel.Normalize(), n )));
 
 	XB_AddSplat( Vector( tr->endpos ), n, d->vel, d->size * RandF( 1.6f, 2.6f ), stretch, d->yellow );
+
+	// on a wall, some drops run: more in Extreme, more for big drops
+	if( fabs( n.z ) < 0.4f )
+	{
+		bool extreme = gEngfuncs.pfnGetCvarFloat( "xb_blood" ) >= 3.0f;
+		float chance = ( extreme ? 0.40f : 0.15f ) * Q_min( 0.6f + d->size * 0.35f, 1.6f );
+		if( RandF( 0.0f, 1.0f ) < chance )
+			XB_AddRun( Vector( tr->endpos ), n, d->size, d->yellow );
+	}
+}
+
+static void XB_UpdateRuns( float dt )
+{
+	pmtrace_t tr;
+
+	for( int i = 0; i < MAX_RUNS; i++ )
+	{
+		xbRun_t *r = &s_runs[i];
+		if( !r->used || r->done )
+			continue;
+
+		// slows as the blood thins out
+		r->speed *= expf( -0.9f * dt );
+		Vector next = r->head + r->dir * ( r->speed * dt );
+
+		// still wall under it? (stops at an edge, a floor or a doorway)
+		if( !XB_Trace( next + r->normal * 2.0f, next - r->normal * 3.0f, &tr ) || fabs( tr.plane.normal[2] ) > 0.5f )
+		{
+			r->done = true;
+			continue;
+		}
+
+		r->head = Vector( tr.endpos ) + r->normal * 0.45f;
+		r->len = ( r->head - r->top ).Length();
+
+		if( r->len >= r->maxLen || r->speed < 1.5f )
+			r->done = true;
+	}
+}
+
+static void XB_DrawRuns( void )
+{
+	triangleapi_t *t = gEngfuncs.pTriAPI;
+	float rgb[3];
+
+	// the drop sprite: wide end at the bottom, where the bead of blood is
+	t->SpriteTexture( s_sprDrop, 0 );
+
+	for( int i = 0; i < MAX_RUNS; i++ )
+	{
+		xbRun_t *r = &s_runs[i];
+		if( !r->used || r->len < 0.5f )
+			continue;
+
+		Vector side = CrossProduct( r->normal, r->dir ).Normalize();
+		Vector mid = ( r->top + r->head ) * 0.5f;
+		// a slight wander, not a ruler-straight line
+		Vector bend = side * ( sinf( r->wobble ) * Q_min( r->len * 0.06f, 1.5f ));
+
+		XB_Light( mid, rgb, r->yellow );
+		t->Color4f( rgb[0] * 0.85f, rgb[1] * 0.85f, rgb[2] * 0.85f, 0.9f );
+
+		Vector w = side * r->width;
+		Vector top = r->top, bot = r->head, m = mid + bend;
+		t->Begin( TRI_QUADS );
+			t->TexCoord2f( 0, 1 ); t->Vertex3fv( top - w * 0.6f );
+			t->TexCoord2f( 1, 1 ); t->Vertex3fv( top + w * 0.6f );
+			t->TexCoord2f( 1, 0.5f ); t->Vertex3fv( m + w * 0.8f );
+			t->TexCoord2f( 0, 0.5f ); t->Vertex3fv( m - w * 0.8f );
+
+			t->TexCoord2f( 0, 0.5f ); t->Vertex3fv( m - w * 0.8f );
+			t->TexCoord2f( 1, 0.5f ); t->Vertex3fv( m + w * 0.8f );
+			t->TexCoord2f( 1, 0 ); t->Vertex3fv( bot + w );
+			t->TexCoord2f( 0, 0 ); t->Vertex3fv( bot - w );
+		t->End();
+	}
 }
 
 static void XB_UpdateDrops( float dt )
@@ -498,6 +611,8 @@ void XBGoreWorld_Draw( void )
 	if( dt > 0.0f )
 		XB_UpdateDrops( dt );
 	XB_UpdatePools();
+	if( dt > 0.0f )
+		XB_UpdateRuns( dt );
 	XB_UpdateFootprints();
 	XB_EndTraces();
 
@@ -508,6 +623,7 @@ void XBGoreWorld_Draw( void )
 	XB_DrawPools();
 	XB_DrawMarks( s_feet, MAX_FEET, s_sprFoot );
 	XB_DrawMarks( s_splats, MAX_SPLATS, s_sprSplat );
+	XB_DrawRuns();
 	XB_DrawDrops();
 
 	t->CullFace( TRI_FRONT );
@@ -631,6 +747,8 @@ void XBGoreWorld_Init( void )
 void XBGoreWorld_VidInit( void )
 {
 	memset( s_drops, 0, sizeof( s_drops ));
+	memset( s_runs, 0, sizeof( s_runs ));
+	s_nextRun = 0;
 	memset( s_splats, 0, sizeof( s_splats ));
 	memset( s_feet, 0, sizeof( s_feet ));
 	memset( s_pools, 0, sizeof( s_pools ));

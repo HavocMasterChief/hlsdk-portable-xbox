@@ -124,6 +124,7 @@ set (CLDLL_SOURCES
 	xb_ragdoll.cpp
 	xb_wheel.cpp
 	xb_gore_world.cpp
+	xb_leg.cpp
 	../public/safe_snprintf.c
 )
 

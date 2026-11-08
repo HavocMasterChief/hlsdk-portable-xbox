@@ -969,7 +969,7 @@ void CStudioModelRenderer::StudioSetupBones( void )
 
 #if XASH_UWP
 	// ragdoll deaths replace the animated pose (xb_ragdoll.cpp)
-	if( IEngineStudio.IsHardware() )
+	if( IEngineStudio.IsHardware() && !XBLeg_Apply( m_pCurrentEntity, m_pStudioHeader, m_pbonetransform, m_plighttransform ))
 		XBRagdoll_Apply( m_pCurrentEntity, m_pStudioHeader, m_pbonetransform, m_plighttransform );
 #endif
 }

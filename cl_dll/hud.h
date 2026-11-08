@@ -237,6 +237,11 @@ private:
 	struct cvar_s *m_pOpen, *m_pStickX, *m_pStickY, *m_pSlowmo;
 };
 void XBRagdoll_Init( void );
+void XBLeg_Init( void );
+void XBLeg_VidInit( void );
+void XBLeg_AddEntity( void );
+void XBLeg_ViewModel( struct cl_entity_s *view, const float *up );
+bool XBLeg_Apply( struct cl_entity_s *ent, void *studiohdr, float (*bones)[128][3][4], float (*lights)[128][3][4] );
 void XBRagdoll_Reset( void );
 struct cl_entity_s;
 void XBRagdoll_Apply( struct cl_entity_s *ent, void *studiohdr, float (*bones)[128][3][4], float (*lights)[128][3][4] );

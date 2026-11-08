@@ -41,7 +41,16 @@ extern int gmsgXBGore;
 extern int gmsgXBRagdoll;
 extern int gmsgXBDrops;
 extern int gmsgXBPool;
-void XBRagdoll_Clear( CBaseEntity *pEnt );   // a respawned monster stops being a ragdoll
+void XBRagdoll_Clear( CBaseEntity *pEnt );
+void XBGore_BodyHit( CBaseMonster *pMonster, const Vector &point, const Vector &dir, float damage );
+void XBGore_BodySquish( CBaseMonster *pMonster, const Vector &point, const Vector &dir );
+// dlls/xb_ragdoll_sv.cpp: bodies in the world
+bool XBRagdoll_Begin( CBaseMonster *pMonster, const Vector &hit, const Vector &push, const Vector &vel );
+void XBRagdoll_Forget( CBaseEntity *pEnt );
+void XBRagdoll_Shove( CBaseEntity *pEnt, const Vector &hit, const Vector &push );
+bool XBRagdoll_Bullet( const Vector &src, const Vector &end, const Vector &dir, float damage );
+void XBRagdoll_Frame( void );
+void XBRagdoll_LevelStart( void );   // a respawned monster stops being a ragdoll
 
 #endif // XASH_UWP
 #endif // XB_GORE_H

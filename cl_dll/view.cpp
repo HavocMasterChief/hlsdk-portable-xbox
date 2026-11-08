@@ -601,6 +601,11 @@ void V_CalcNormalRefdef( struct ref_params_s *pparams )
 	view->angles[ROLL] -= bob * 1.0f;
 	view->angles[PITCH] -= bob * 0.3f;
 
+#if XASH_UWP
+	// the weapon dips while the leg kicks (xb_leg.cpp)
+	XBLeg_ViewModel( view, pparams->up );
+#endif
+
 	// pushing the view origin down off of the same X/Z plane as the ent's origin will give the
 	// gun a very nice 'shifting' effect when the player looks up/down. If there is a problem
 	// with view model distortion, this may be a cause. (SJB). 

@@ -528,6 +528,9 @@ void DLLEXPORT HUD_CreateEntities( void )
 #endif
 	// Add in any game specific objects
 	Game_AddObjects();
+#if XASH_UWP
+	XBLeg_AddEntity();  // the kick (xb_leg.cpp)
+#endif
 
 	GetClientVoiceMgr()->CreateEntities();
 }

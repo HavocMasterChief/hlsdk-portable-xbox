@@ -1381,6 +1381,27 @@ void CBaseMonster::TraceAttack( entvars_t *pevAttacker, float flDamage, Vector v
 	}
 }
 
+#if XASH_UWP
+// how hard a bullet hits, for bodies on the floor
+static float XB_BulletDamage( int type, int iDamage, bool player )
+{
+	if( iDamage )
+		return iDamage;
+
+	switch( type )
+	{
+	case BULLET_PLAYER_9MM:     return gSkillData.plrDmg9MM;
+	case BULLET_PLAYER_MP5:     return gSkillData.plrDmgMP5;
+	case BULLET_PLAYER_357:     return gSkillData.plrDmg357;
+	case BULLET_PLAYER_BUCKSHOT:return gSkillData.plrDmgBuckshot;
+	case BULLET_MONSTER_9MM:    return gSkillData.monDmg9MM;
+	case BULLET_MONSTER_MP5:    return gSkillData.monDmgMP5;
+	case BULLET_MONSTER_12MM:   return gSkillData.monDmg12MM;
+	default:                    return player ? 10.0f : 8.0f;
+	}
+}
+#endif
+
 /*
 ================
 FireBullets
@@ -1421,6 +1442,16 @@ void CBaseEntity::FireBullets( ULONG cShots, Vector vecSrc, Vector vecDirShootin
 
 		vecEnd = vecSrc + vecDir * flDistance;
 		UTIL_TraceLine( vecSrc, vecEnd, dont_ignore_monsters, ENT( pev )/*pentIgnore*/, &tr );
+#if XASH_UWP
+		// a body lying in the way takes the bullet: it bleeds and moves
+		if( XBRagdoll_Bullet( vecSrc, tr.vecEndPos, vecDir, XB_BulletDamage( iBulletType, iDamage, true ) ))
+			continue;
+#endif
+#if XASH_UWP
+		// a body lying in the way takes the bullet: it bleeds and moves
+		if( XBRagdoll_Bullet( vecSrc, tr.vecEndPos, vecDir, XB_BulletDamage( iBulletType, iDamage, false ) ))
+			continue;
+#endif
 
 		tracer = 0;
 		if( iTracerFreq != 0 && ( tracerCount++ % iTracerFreq ) == 0 )

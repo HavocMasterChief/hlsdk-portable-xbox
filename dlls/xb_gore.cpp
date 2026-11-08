@@ -166,6 +166,7 @@ int XBGore_Color( int color )
 
 void XBGore_LevelStart( void )
 {
+	XBRagdoll_LevelStart();
 	memset( s_pools, 0, sizeof( s_pools ));
 	memset( s_runs, 0, sizeof( s_runs ));
 	memset( s_drips, 0, sizeof( s_drips ));
@@ -516,6 +517,8 @@ void XBGore_Frame( void )
 		XBGore_LevelStart();
 	last = gpGlobals->time;
 
+	XBRagdoll_Frame();
+
 	if( XBGore_Mode() == XB_BLOOD_OFF )
 		return;
 
@@ -580,16 +583,10 @@ static Vector XB_RagdollPush( CBaseMonster *pMonster, entvars_t *pevInflictor, f
 	return dir.Normalize() * speed * scale;
 }
 
-static void XB_WriteVec( const Vector &v )
-{
-	WRITE_COORD( v.x );
-	WRITE_COORD( v.y );
-	WRITE_COORD( v.z );
-}
 
 void XBRagdoll_Send( CBaseMonster *pMonster )
 {
-	if( !gmsgXBRagdoll || !pMonster )
+	if( !pMonster )
 		return;
 
 	Vector push = XB_RagdollPush( pMonster, g_pevLastInflictor, 1.0f );
@@ -602,38 +599,63 @@ void XBRagdoll_Send( CBaseMonster *pMonster )
 		vel = gpGlobals->v_forward * Q_min( pMonster->m_flGroundSpeed, 400.0f );
 	}
 
-	MESSAGE_BEGIN( MSG_ALL, gmsgXBRagdoll );
-		WRITE_SHORT( pMonster->entindex() );
-		WRITE_BYTE( XB_RD_DIED );
-		XB_WriteVec( pMonster->m_xbLastHitPos.Length() > 0.0f ? pMonster->m_xbLastHitPos : pMonster->Center() );
-		XB_WriteVec( push );
-		XB_WriteVec( vel );
-		WRITE_BYTE( pMonster->m_LastHitGroup );
-	MESSAGE_END();
+	Vector hit = pMonster->m_xbLastHitPos.Length() > 0.0f ? pMonster->m_xbLastHitPos : pMonster->Center();
+	XBRagdoll_Begin( pMonster, hit, push, vel );
 }
 
 void XBRagdoll_Hit( CBaseMonster *pMonster, entvars_t *pevInflictor )
 {
-	if( !gmsgXBRagdoll || !pMonster )
+	if( !pMonster )
 		return;
 
-	MESSAGE_BEGIN( MSG_ALL, gmsgXBRagdoll );
-		WRITE_SHORT( pMonster->entindex() );
-		WRITE_BYTE( XB_RD_HIT );
-		XB_WriteVec( pMonster->m_xbLastHitPos.Length() > 0.0f ? pMonster->m_xbLastHitPos : pMonster->Center() );
-		XB_WriteVec( XB_RagdollPush( pMonster, pevInflictor, 0.6f ));
-	MESSAGE_END();
+	Vector hit = pMonster->m_xbLastHitPos.Length() > 0.0f ? pMonster->m_xbLastHitPos : pMonster->Center();
+	XBRagdoll_Shove( pMonster, hit, XB_RagdollPush( pMonster, pevInflictor, 0.7f ));
 }
 
 void XBRagdoll_Clear( CBaseEntity *pEnt )
 {
-	if( !gmsgXBRagdoll || !pEnt )
+	XBRagdoll_Forget( pEnt );
+}
+
+/*
+=============
+XBGore_BodyHit
+
+A bullet hit a ragdoll's limb: bleed like a living monster would.
+=============
+*/
+void XBGore_BodyHit( CBaseMonster *pMonster, const Vector &point, const Vector &dir, float damage )
+{
+	int color = pMonster->BloodColor();
+
+	if( color == DONT_BLEED || XBGore_Mode() == XB_BLOOD_OFF )
 		return;
 
-	MESSAGE_BEGIN( MSG_ALL, gmsgXBRagdoll );
-		WRITE_SHORT( pEnt->entindex() );
-		WRITE_BYTE( XB_RD_CLEAR );
-	MESSAGE_END();
+	UTIL_BloodDrips( point, -dir, XBGore_Color( color ), (int)damage );
+	XB_SendDrops( point, dir, XB_KIND_HIT, 0, 0, 0, color, Q_max( 0.3f, Q_min( damage / 12.0f, 4.0f )));
+
+	// the floor or wall behind it gets marked, as with a living target
+	TraceResult tr;
+	UTIL_TraceLine( point, point + dir * 172.0f, ignore_monsters, pMonster->edict(), &tr );
+	if( tr.flFraction < 1.0f )
+		UTIL_BloodDecalTrace( &tr, XBGore_Color( color ));
+}
+
+/*
+=============
+XBGore_BodySquish
+
+Stepping through a fresh body.
+=============
+*/
+void XBGore_BodySquish( CBaseMonster *pMonster, const Vector &point, const Vector &dir )
+{
+	int color = pMonster->BloodColor();
+
+	if( color == DONT_BLEED || XBGore_Mode() == XB_BLOOD_OFF )
+		return;
+
+	XB_SendDrops( point + Vector( 0, 0, 2 ), Vector( dir.x, dir.y, 0.6f ), XB_KIND_JET, RANDOM_LONG( 3, 6 ), RANDOM_FLOAT( 60.0f, 110.0f ), 0.5f, color );
 }
 
 #endif // XASH_UWP
