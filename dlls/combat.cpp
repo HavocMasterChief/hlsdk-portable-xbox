@@ -515,6 +515,20 @@ void CBaseMonster::BecomeDead( void )
 
 BOOL CBaseMonster::ShouldGibMonster( int iGib )
 {
+#if XASH_UWP
+	// Xbox: only explosives, crushing, always-gib weapons (egon, explosive
+	// bolts, barnacle...) and a charged Gauss shot can gib. Everything else
+	// leaves a body to ragdoll and bleed into a pool.
+	{
+		int t = m_xbLastDmgType;
+		bool heavy = ( t & ( DMG_BLAST | DMG_MORTAR | DMG_CRUSH | DMG_ALWAYSGIB )) != 0
+			|| (( t & DMG_BULLET ) && m_xbLastDamage >= 100.0f );
+
+		if( !heavy || iGib == GIB_NEVER )
+			return FALSE;
+		return iGib == GIB_ALWAYS || pev->health < GIB_HEALTH_VALUE;
+	}
+#endif
 	if( ( iGib == GIB_NORMAL && pev->health < GIB_HEALTH_VALUE ) || ( iGib == GIB_ALWAYS ) )
 		return TRUE;
 
@@ -582,7 +596,9 @@ void CBaseMonster::Killed( entvars_t *pevAttacker, int iGib )
 	Remember( bits_MEMORY_KILLED );
 
 #if XASH_UWP
-	XBGore_Killed( this );
+	// a pool only under a body that stays: gibs get their own burst
+	if( !ShouldGibMonster( iGib ))
+		XBGore_Killed( this );
 #endif
 
 	// clear the deceased's sound channels.(may have been firing or reloading when killed)
@@ -843,6 +859,13 @@ int CBaseMonster::TakeDamage( entvars_t *pevInflictor, entvars_t *pevAttacker, f
 
 	// set damage type sustained
 	m_bitsDamageType |= bitsDamageType;
+#if XASH_UWP
+	m_xbLastDamage = flDamage;
+	m_xbLastDmgType = bitsDamageType;
+	// explosions and other damage without a bullet trace hit the middle
+	if( !( bitsDamageType & ( DMG_BULLET | DMG_SLASH | DMG_CLUB )))
+		m_xbLastHitPos = Center();
+#endif
 
 	// grab the vector of the incoming attack. ( pretend that the inflictor is a little lower than it really is, so the body will tend to fly upward a bit).
 	vecDir = Vector( 0, 0, 0 );
@@ -958,6 +981,13 @@ int CBaseMonster::DeadTakeDamage( entvars_t *pevInflictor, entvars_t *pevAttacke
 {
 	Vector vecDir;
 
+#if XASH_UWP
+	m_xbLastDamage = flDamage;
+	m_xbLastDmgType = bitsDamageType;
+	if( !( bitsDamageType & ( DMG_BULLET | DMG_SLASH | DMG_CLUB )))
+		m_xbLastHitPos = Center();
+#endif
+
 	// grab the vector of the incoming attack. ( pretend that the inflictor is a little lower than it really is, so the body will tend to fly upward a bit).
 	vecDir = Vector( 0, 0, 0 );
 	if( !FNullEnt( pevInflictor ) )
@@ -981,6 +1011,12 @@ int CBaseMonster::DeadTakeDamage( entvars_t *pevInflictor, entvars_t *pevAttacke
 		pev->velocity = pev->velocity + vecDir * -DamageForce( flDamage );
 	}
 #endif
+#if XASH_UWP
+	// the ragdoll the player sees jerks from the hit
+	if( !FNullEnt( pevInflictor ))
+		XBRagdoll_Hit( this, pevInflictor );
+#endif
+
 	// kill the corpse if enough damage was done to destroy the corpse and the damage is of a type that is allowed to destroy the corpse.
 	if( bitsDamageType & DMG_GIB_CORPSE )
 	{
@@ -1336,6 +1372,8 @@ void CBaseMonster::TraceAttack( entvars_t *pevAttacker, float flDamage, Vector v
 		SpawnBlood( ptr->vecEndPos, BloodColor(), flDamage );// a little surface blood.
 		TraceBleed( flDamage, vecDir, ptr, bitsDamageType );
 #if XASH_UWP
+		m_xbLastHitPos = ptr->vecEndPos;
+		m_xbLastShotDir = vecDir;
 		if( bitsDamageType & ( DMG_BULLET | DMG_SLASH | DMG_CLUB ))
 			XBGore_Wounded( this, ptr->vecEndPos, vecDir, ptr->iHitgroup, flDamage );
 #endif

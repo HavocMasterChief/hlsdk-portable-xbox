@@ -7,27 +7,31 @@ it under the terms of the GNU General Public License as published by
 the Free Software Foundation; either version 2 of the License, or
 (at your option) any later version.
 
-Half-Life version of RealRTCWX's cg_ragdoll.c. When a monster with a
-human skeleton dies, the server sends "XBRagdoll" (dlls/xb_gore.cpp) and
-the body stops following its death animation:
+Half-Life version of RealRTCWX's cg_ragdoll.c. When a monster dies the
+server sends "XBRagdoll" (dlls/xb_gore.cpp) and the body stops following
+its death animation:
 
-  - 15 joints (pelvis, chest, head, shoulders, elbows, hands, hips, knees,
-    feet) are read from the Bip01 skeleton every Half-Life human model
-    shares, and simulated as Verlet particles held together by distance
-    constraints, with braces that keep the torso rigid.
-  - The body is split into rigid parts (pelvis, chest+head, upper arms,
-    forearms+hands, thighs, calves+feet). Each frame every part's rotation
-    is worked out from its joints and applied to every bone of that part,
-    starting from the pose at the moment of death.
+  - The skeleton becomes a set of particles with a size each (Verlet),
+    held together by links. Humans (Bip01 skeletons) use a hand-made body:
+    15 joints, a braced torso, hinge knees and elbows, limited spine, neck,
+    shoulders and hips. Anything else (headcrabs, houndeyes, bullsquids...)
+    gets a body built from its own bones: a rigid core and limbs whose
+    joints only bend so far.
+  - Particles have thickness: limbs rest on the floor and on each other
+    instead of sinking through.
+  - The killing hit throws the body: hardest where it landed, carried
+    through the joints, plus whatever speed the monster had. Shots and
+    blasts on a body already down push it again.
+  - The pose drawn each frame is blended between physics steps, so nothing
+    shakes, and bodies go to sleep once still.
   - Purely visual: the server still has the body where it fell.
 
-Bodies that settle stop simulating. xb_ragdoll 0 turns ragdolls off.
-Monsters without the Bip01 joints (aliens, headcrabs...) keep their
-normal death animation.
+xb_ragdoll 0 turns ragdolls off.
 */
 
 #include <ctype.h>
 #include <string.h>
+#include <math.h>
 #include "hud.h"
 #include "cl_util.h"
 #include "parsemsg.h"
@@ -41,25 +45,82 @@ normal death animation.
 
 #if XASH_UWP
 
-// dlls/monsters.h
-#define HITGROUP_HEAD      1
-#define HITGROUP_STOMACH   3
-#define HITGROUP_LEFTARM   4
-#define HITGROUP_RIGHTARM  5
-#define HITGROUP_LEFTLEG   6
-#define HITGROUP_RIGHTLEG  7
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
-#define RD_MAX        48      // bodies kept in their ragdoll pose
-#define RD_MAX_SIM    12      // of those, how many may still be moving
-#define RD_STEP       ( 1.0f / 45.0f )
-#define RD_ITER       10
-#define RD_GRAVITY    600.0f
-#define RD_DRAG       0.96f
-#define RD_FRICTION   0.25f   // tangential speed kept on contact
-#define RD_SETTLE     0.15f   // units per step below which a body is resting
-#define RD_REST_TIME  0.4f    // resting this long stops the simulation
-#define RD_MAX_TIME   6.0f    // and nothing simulates longer than this
+#define RD_MAX         40      // bodies kept in their ragdoll pose
+#define RD_MAX_SIM     10      // of those, how many may still be moving
+#define RD_MAX_P       24      // particles per body
+#define RD_MAX_LINKS   120
+#define RD_MAX_PARTS   24
 
+#define RD_STEP        ( 1.0f / 60.0f )
+#define RD_ITER        8
+#define RD_GRAVITY     640.0f
+#define RD_AIR_DRAG    0.998f   // speed kept per step in the air
+#define RD_CONTACT_KEEP 0.85f   // speed kept per step by a particle touching the world
+#define RD_GROUND_KEEP 0.30f    // tangential speed kept on contact
+#define RD_JOINT_FRIC  0.06f    // how much linked particles share speed: joint stiffness
+#define RD_SETTLE      0.15f    // units per step below which a body is resting
+#define RD_REST_TIME   0.3f
+#define RD_MAX_TIME    7.0f
+
+enum { XB_RD_DIED = 0, XB_RD_HIT, XB_RD_CLEAR };
+
+struct rdLink
+{
+	unsigned char a, b;
+	float lo, hi;           // allowed length range
+	bool limb;              // shares speed (joint friction)
+};
+
+struct rdPart
+{
+	signed char org, axis, ref;   // ref < 0: carry the twist frame to frame
+	float rest[3][3];
+	Vector z;
+};
+
+struct rdBody_t
+{
+	bool used, started, moving, human;
+	int ent;
+	model_t *model;
+	int numbones;
+	float spawned, wake, lastTime, accum, rest_time;
+
+	// what killed it, applied on the first frame
+	Vector hitPos, push, vel;
+	bool havePush;
+
+	int np;
+	int pBone[RD_MAX_P];
+	float radius[RD_MAX_P];
+	Vector p[RD_MAX_P], o[RD_MAX_P], prev[RD_MAX_P], safe[RD_MAX_P], restP[RD_MAX_P];
+	bool contact[RD_MAX_P];
+
+	int nl;
+	rdLink links[RD_MAX_LINKS];
+
+	int nparts;
+	rdPart parts[RD_MAX_PARTS];
+	signed char boneVert[MAXSTUDIOBONES];   // which particle the bone hangs from
+	signed char bonePart[MAXSTUDIOBONES];
+	float rest[MAXSTUDIOBONES][3][4];
+
+	// human extras
+	float kneeSide;
+};
+
+static rdBody_t s_bodies[RD_MAX];
+static cvar_t *xb_ragdoll;
+
+/*
+================
+human skeleton
+================
+*/
 enum
 {
 	J_PELVIS, J_CHEST, J_HEAD,
@@ -94,6 +155,41 @@ static const char *s_jointBones[J_NUM][RD_NAMES] =
 	{ "r foot", NULL },
 };
 
+static const float s_jointRadius[J_NUM] =
+{
+	8.0f, 9.0f, 5.5f,
+	4.5f, 3.5f, 2.5f,
+	4.5f, 3.5f, 2.5f,
+	5.0f, 4.0f, 3.0f,
+	5.0f, 4.0f, 3.0f,
+};
+
+// rigid parts: origin joint, axis joint, reference joint for the twist (-1: carried)
+enum { S_PELVIS, S_CHEST, S_LUARM, S_LFARM, S_RUARM, S_RFARM, S_LTHIGH, S_LCALF, S_RTHIGH, S_RCALF, S_NUM };
+static const int s_humanParts[S_NUM][3] =
+{
+	{ J_PELVIS,    J_CHEST,  J_LHIP },
+	{ J_CHEST,     J_HEAD,   J_LSHOULDER },
+	{ J_LSHOULDER, J_LELBOW, -1 },
+	{ J_LELBOW,    J_LHAND,  -1 },
+	{ J_RSHOULDER, J_RELBOW, -1 },
+	{ J_RELBOW,    J_RHAND,  -1 },
+	{ J_LHIP,      J_LKNEE,  -1 },
+	{ J_LKNEE,     J_LFOOT,  -1 },
+	{ J_RHIP,      J_RKNEE,  -1 },
+	{ J_RKNEE,     J_RFOOT,  -1 },
+};
+
+// which part each joint's bones belong to
+static const int s_jointPart[J_NUM] =
+{
+	S_PELVIS, S_CHEST, S_CHEST,
+	S_LUARM, S_LFARM, S_LFARM,
+	S_RUARM, S_RFARM, S_RFARM,
+	S_LTHIGH, S_LCALF, S_LCALF,
+	S_RTHIGH, S_RCALF, S_RCALF,
+};
+
 // "Bip01 L Arm1" -> "l arm1"; anything not on a biped -> NULL
 static const char *RD_BoneKey( const char *name, char *out, size_t size )
 {
@@ -112,85 +208,577 @@ static const char *RD_BoneKey( const char *name, char *out, size_t size )
 	return k;
 }
 
-// rigid parts: origin joint, axis joint, reference joint for the twist
-enum { S_PELVIS, S_CHEST, S_LUARM, S_LFARM, S_RUARM, S_RFARM, S_LTHIGH, S_LCALF, S_RTHIGH, S_RCALF, S_NUM };
-static const int s_segs[S_NUM][3] =
+static inline Vector RD_BonePos( const float m[3][4] )
 {
-	{ J_PELVIS,    J_CHEST,  J_LHIP },
-	{ J_CHEST,     J_HEAD,   J_LSHOULDER },
-	{ J_LSHOULDER, J_LELBOW, J_CHEST },
-	{ J_LELBOW,    J_LHAND,  J_CHEST },
-	{ J_RSHOULDER, J_RELBOW, J_CHEST },
-	{ J_RELBOW,    J_RHAND,  J_CHEST },
-	{ J_LHIP,      J_LKNEE,  J_PELVIS },
-	{ J_LKNEE,     J_LFOOT,  J_PELVIS },
-	{ J_RHIP,      J_RKNEE,  J_PELVIS },
-	{ J_RKNEE,     J_RFOOT,  J_PELVIS },
-};
+	return Vector( m[0][3], m[1][3], m[2][3] );
+}
 
-// which part each joint's bones belong to
-static const int s_jointSeg[J_NUM] =
+/*
+================
+building
+================
+*/
+static void RD_Link( rdBody_t *b, int a, int c, bool limb )
 {
-	S_PELVIS, S_CHEST, S_CHEST,
-	S_LUARM, S_LFARM, S_LFARM,
-	S_RUARM, S_RFARM, S_RFARM,
-	S_LTHIGH, S_LCALF, S_LCALF,
-	S_RTHIGH, S_RCALF, S_RCALF,
-};
+	if( b->nl >= RD_MAX_LINKS || a == c )
+		return;
 
-// distance constraints: the skeleton plus braces that keep the torso a solid block
-static const int s_links[][2] =
+	float len = ( b->restP[a] - b->restP[c] ).Length();
+	rdLink *l = &b->links[b->nl++];
+	l->a = a;
+	l->b = c;
+	l->lo = len;
+	l->hi = len;
+	l->limb = limb;
+}
+
+// a joint at mid between ends a and c may bend until its inside angle is
+// minAngle degrees: a range link between the two ends, whichever way it bends
+static void RD_BendLimit( rdBody_t *b, int a, int mid, int c, float minAngle )
 {
-	{ J_PELVIS, J_CHEST }, { J_CHEST, J_HEAD },
-	{ J_CHEST, J_LSHOULDER }, { J_LSHOULDER, J_LELBOW }, { J_LELBOW, J_LHAND },
-	{ J_CHEST, J_RSHOULDER }, { J_RSHOULDER, J_RELBOW }, { J_RELBOW, J_RHAND },
-	{ J_PELVIS, J_LHIP }, { J_LHIP, J_LKNEE }, { J_LKNEE, J_LFOOT },
-	{ J_PELVIS, J_RHIP }, { J_RHIP, J_RKNEE }, { J_RKNEE, J_RFOOT },
-	// braces
-	{ J_LSHOULDER, J_RSHOULDER }, { J_LHIP, J_RHIP },
-	{ J_LSHOULDER, J_PELVIS }, { J_RSHOULDER, J_PELVIS },
-	{ J_LHIP, J_CHEST }, { J_RHIP, J_CHEST },
-	{ J_HEAD, J_LSHOULDER }, { J_HEAD, J_RSHOULDER },
-	{ J_LHIP, J_RSHOULDER }, { J_RHIP, J_LSHOULDER },
-	// head stays on the shoulders
-	{ J_HEAD, J_PELVIS },
-	// range links: elbows and knees bend, but only so far
-	{ J_LSHOULDER, J_LHAND }, { J_RSHOULDER, J_RHAND },
-	{ J_LHIP, J_LFOOT }, { J_RHIP, J_RFOOT },
-};
-// shortest each range link may get, as a share of its length at death
-static const float s_reachMin[4] = { 0.45f, 0.45f, 0.6f, 0.6f };
-#define RD_NUM_LINKS ( sizeof( s_links ) / sizeof( s_links[0] ))
-// limb "reach" links may shorten (bend) down to s_reachMin but never stretch
-#define RD_FIRST_REACH ( RD_NUM_LINKS - 4 )
+	if( b->nl >= RD_MAX_LINKS )
+		return;
 
-struct rdBody_t
+	float la = ( b->restP[a] - b->restP[mid] ).Length();
+	float lc = ( b->restP[c] - b->restP[mid] ).Length();
+	float rad = minAngle * (float)( M_PI / 180.0 );
+	float lo = sqrtf( Q_max( 0.0f, la * la + lc * lc - 2.0f * la * lc * cosf( rad )));
+
+	rdLink *l = &b->links[b->nl++];
+	l->a = a;
+	l->b = c;
+	l->lo = lo;
+	l->hi = la + lc;
+	l->limb = false;
+}
+
+static void RD_Basis( const Vector &a, const Vector &axisEnd, const Vector &ref, float m[3][3] )
 {
-	bool used, started, moving;
-	int ent;
-	model_t *model;
-	int sequence;
-	float spawned, lastTime, accum, rest_time;
-	Vector impulse;
-	int hitJoint;
+	Vector x = ( axisEnd - a );
+	if( x.Length() < 0.001f )
+		x = Vector( 1, 0, 0 );
+	x = x.Normalize();
 
-	int numbones;
+	Vector z = CrossProduct( x, ref - a );
+	if( z.Length() < 0.001f )
+		z = CrossProduct( x, fabs( x.z ) < 0.9f ? Vector( 0, 0, 1 ) : Vector( 1, 0, 0 ));
+	z = z.Normalize();
+
+	Vector y = CrossProduct( z, x );
+
+	for( int i = 0; i < 3; i++ )
+	{
+		m[i][0] = x[i];
+		m[i][1] = y[i];
+		m[i][2] = z[i];
+	}
+}
+
+static int RD_AddPart( rdBody_t *b, int org, int axis, int ref )
+{
+	if( b->nparts >= RD_MAX_PARTS )
+		return 0;
+
+	rdPart *pt = &b->parts[b->nparts];
+	pt->org = org;
+	pt->axis = axis;
+	pt->ref = ref;
+
+	Vector refPos;
+	if( ref >= 0 )
+		refPos = b->restP[ref];
+	else
+		refPos = b->restP[org] + Vector( 0, 0, 1 ); // any side will do for the start
+
+	RD_Basis( b->restP[org], b->restP[axis], refPos, pt->rest );
+	pt->z = Vector( pt->rest[0][2], pt->rest[1][2], pt->rest[2][2] );
+	return b->nparts++;
+}
+
+static bool RD_BuildHuman( rdBody_t *b, studiohdr_t *hdr )
+{
+	mstudiobone_t *pbones = (mstudiobone_t *)((byte *)hdr + hdr->boneindex);
+	char keys[MAXSTUDIOBONES][32];
+	const char *key[MAXSTUDIOBONES];
 	int jointBone[J_NUM];
-	signed char boneSeg[MAXSTUDIOBONES];
-	float rest[MAXSTUDIOBONES][3][4];
-	Vector restJoint[J_NUM];
-	float linkLen[RD_NUM_LINKS];
 
-	Vector p[J_NUM], o[J_NUM];
-	Vector safe[J_NUM];         // last position known to be out of the world
-	float kneeSide;             // which way the knees bent at death (+ forward)
-	float restBasis[S_NUM][3][3];
-	Vector segZ[S_NUM];         // each part's twist axis, carried frame to frame
-};
+	for( int i = 0; i < hdr->numbones && i < MAXSTUDIOBONES; i++ )
+		key[i] = RD_BoneKey( pbones[i].name, keys[i], sizeof( keys[i] ));
 
-static rdBody_t s_bodies[RD_MAX];
-static cvar_t *xb_ragdoll;
+	for( int j = 0; j < J_NUM; j++ )
+	{
+		jointBone[j] = -1;
+		for( int n = 0; n < RD_NAMES && s_jointBones[j][n] && jointBone[j] < 0; n++ )
+		{
+			for( int i = 0; i < hdr->numbones; i++ )
+			{
+				if( !key[i] || strcmp( key[i], s_jointBones[j][n] ))
+					continue;
 
+				// one bone can't be two joints
+				bool taken = false;
+				for( int k = 0; k < j; k++ )
+					if( jointBone[k] == i ) taken = true;
+
+				if( !taken )
+				{
+					jointBone[j] = i;
+					break;
+				}
+			}
+		}
+
+		if( jointBone[j] < 0 )
+			return false;
+	}
+
+	b->human = true;
+	b->np = J_NUM;
+	for( int j = 0; j < J_NUM; j++ )
+	{
+		b->pBone[j] = jointBone[j];
+		b->radius[j] = s_jointRadius[j];
+		b->restP[j] = RD_BonePos( b->rest[jointBone[j]] );
+	}
+
+	// skeleton
+	RD_Link( b, J_PELVIS, J_CHEST, true );
+	RD_Link( b, J_CHEST, J_HEAD, true );
+	RD_Link( b, J_CHEST, J_LSHOULDER, true );   RD_Link( b, J_LSHOULDER, J_LELBOW, true );  RD_Link( b, J_LELBOW, J_LHAND, true );
+	RD_Link( b, J_CHEST, J_RSHOULDER, true );   RD_Link( b, J_RSHOULDER, J_RELBOW, true );  RD_Link( b, J_RELBOW, J_RHAND, true );
+	RD_Link( b, J_PELVIS, J_LHIP, true );       RD_Link( b, J_LHIP, J_LKNEE, true );        RD_Link( b, J_LKNEE, J_LFOOT, true );
+	RD_Link( b, J_PELVIS, J_RHIP, true );       RD_Link( b, J_RHIP, J_RKNEE, true );        RD_Link( b, J_RKNEE, J_RFOOT, true );
+
+	// braces: the torso is a solid block
+	RD_Link( b, J_LSHOULDER, J_RSHOULDER, false );  RD_Link( b, J_LHIP, J_RHIP, false );
+	RD_Link( b, J_LSHOULDER, J_PELVIS, false );     RD_Link( b, J_RSHOULDER, J_PELVIS, false );
+	RD_Link( b, J_LHIP, J_CHEST, false );           RD_Link( b, J_RHIP, J_CHEST, false );
+	RD_Link( b, J_LHIP, J_RSHOULDER, false );       RD_Link( b, J_RHIP, J_LSHOULDER, false );
+	RD_Link( b, J_HEAD, J_LSHOULDER, false );       RD_Link( b, J_HEAD, J_RSHOULDER, false );
+
+	// how far each joint bends
+	RD_BendLimit( b, J_PELVIS, J_CHEST, J_HEAD, 140.0f );        // spine + neck: about 40 degrees
+	RD_BendLimit( b, J_LSHOULDER, J_LELBOW, J_LHAND, 35.0f );    // elbows: up to 145
+	RD_BendLimit( b, J_RSHOULDER, J_RELBOW, J_RHAND, 35.0f );
+	RD_BendLimit( b, J_LHIP, J_LKNEE, J_LFOOT, 35.0f );          // knees: up to 145
+	RD_BendLimit( b, J_RHIP, J_RKNEE, J_RFOOT, 35.0f );
+	RD_BendLimit( b, J_CHEST, J_LSHOULDER, J_LELBOW, 25.0f );    // an arm can't fold into the chest
+	RD_BendLimit( b, J_CHEST, J_RSHOULDER, J_RELBOW, 25.0f );
+	RD_BendLimit( b, J_RHIP, J_LHIP, J_LKNEE, 40.0f );           // legs can't cross far through each other
+	RD_BendLimit( b, J_LHIP, J_RHIP, J_RKNEE, 40.0f );
+
+	for( int s = 0; s < S_NUM; s++ )
+		RD_AddPart( b, s_humanParts[s][0], s_humanParts[s][1], s_humanParts[s][2] );
+
+	// every bone moves with the part of its nearest joint ancestor
+	for( int i = 0; i < hdr->numbones; i++ )
+	{
+		int part = S_PELVIS, vert = J_PELVIS;
+
+		for( int k = i; k >= 0; k = pbones[k].parent )
+		{
+			int j;
+			for( j = 0; j < J_NUM; j++ )
+				if( jointBone[j] == k ) break;
+
+			if( j < J_NUM )
+			{
+				part = s_jointPart[j];
+				vert = j;
+				break;
+			}
+		}
+		b->bonePart[i] = part;
+		b->boneVert[i] = vert;
+	}
+
+	return true;
+}
+
+/*
+================
+any other skeleton: built from its own bones
+================
+*/
+static bool RD_BuildGeneric( rdBody_t *b, studiohdr_t *hdr )
+{
+	mstudiobone_t *pbones = (mstudiobone_t *)((byte *)hdr + hdr->boneindex);
+	int boneP[MAXSTUDIOBONES];   // particle of the bone itself, or -1
+	int parentP[RD_MAX_P];
+
+	b->human = false;
+	b->np = 0;
+	b->nl = 0;
+	b->nparts = 0;
+
+	// a particle for every bone that sits apart from its parent; bones on top of
+	// their parent (twist helpers, roots) share the parent's particle
+	for( int i = 0; i < hdr->numbones; i++ )
+	{
+		boneP[i] = -1;
+		int par = pbones[i].parent;
+		Vector pos = RD_BonePos( b->rest[i] );
+
+		if( par >= 0 )
+		{
+			int pp = -1;
+			for( int k = par; k >= 0 && pp < 0; k = pbones[k].parent )
+				pp = boneP[k];
+
+			if( pp >= 0 && ( pos - b->restP[pp] ).Length() < 2.5f )
+				continue;
+		}
+
+		if( b->np >= RD_MAX_P )
+			continue;
+
+		int n = b->np++;
+		boneP[i] = n;
+		b->pBone[n] = i;
+		b->restP[n] = pos;
+
+		parentP[n] = -1;
+		for( int k = par; k >= 0 && parentP[n] < 0; k = pbones[k].parent )
+			parentP[n] = boneP[k];
+	}
+
+	if( b->np < 2 )
+		return false;
+
+	// the creature's size sets particle sizes and the core
+	Vector mins = b->restP[0], maxs = b->restP[0];
+	for( int n = 1; n < b->np; n++ )
+	{
+		for( int a = 0; a < 3; a++ )
+		{
+			mins[a] = Q_min( mins[a], b->restP[n][a] );
+			maxs[a] = Q_max( maxs[a], b->restP[n][a] );
+		}
+	}
+	float extent = ( maxs - mins ).Length();
+	float coreRadius = Q_max( 6.0f, extent * 0.22f );
+
+	// the core: the root and everything close to it is one rigid body
+	bool core[RD_MAX_P];
+	for( int n = 0; n < b->np; n++ )
+	{
+		core[n] = ( n == 0 ) || ( b->restP[n] - b->restP[0] ).Length() <= coreRadius;
+		b->radius[n] = core[n] ? Q_max( 2.5f, extent * 0.08f ) : Q_max( 1.5f, extent * 0.04f );
+	}
+
+	for( int n = 0; n < b->np; n++ )
+	{
+		if( parentP[n] >= 0 )
+			RD_Link( b, parentP[n], n, true );
+
+		// a joint bends at most to 40 degrees inside
+		if( parentP[n] >= 0 && parentP[parentP[n]] >= 0 && !core[n] )
+			RD_BendLimit( b, parentP[parentP[n]], parentP[n], n, 40.0f );
+	}
+
+	for( int a = 0; a < b->np; a++ )
+		for( int c = a + 1; c < b->np; c++ )
+			if( core[a] && core[c] && parentP[c] != a && parentP[a] != c )
+				RD_Link( b, a, c, false );
+
+	// parts: the core moves as one, every other particle turns with its own bone
+	int coreRef1 = -1, coreRef2 = -1;
+	for( int n = 1; n < b->np; n++ )
+	{
+		if( !core[n] ) continue;
+		if( coreRef1 < 0 ) { coreRef1 = n; continue; }
+		Vector d1 = ( b->restP[coreRef1] - b->restP[0] ).Normalize();
+		Vector d2 = ( b->restP[n] - b->restP[0] ).Normalize();
+		if( CrossProduct( d1, d2 ).Length() > 0.3f ) { coreRef2 = n; break; }
+	}
+
+	int partOf[RD_MAX_P];
+	int corePart;
+	if( coreRef1 >= 0 )
+	{
+		corePart = RD_AddPart( b, 0, coreRef1, coreRef2 );
+	}
+	else
+	{
+		// no core to speak of: the root turns with its first child
+		int child = -1;
+		for( int n = 1; n < b->np && child < 0; n++ )
+			if( parentP[n] == 0 ) child = n;
+		corePart = RD_AddPart( b, 0, child >= 0 ? child : 1, -1 );
+	}
+
+	for( int n = 0; n < b->np; n++ )
+	{
+		if( core[n] )
+		{
+			partOf[n] = corePart;
+			continue;
+		}
+
+		int child = -1;
+		for( int c = 0; c < b->np && child < 0; c++ )
+			if( parentP[c] == n ) child = c;
+
+		if( child >= 0 )
+			partOf[n] = RD_AddPart( b, n, child, -1 );
+		else if( parentP[n] >= 0 )
+			partOf[n] = RD_AddPart( b, parentP[n], n, -1 ); // a tip follows the bone leading to it
+		else
+			partOf[n] = corePart;
+	}
+
+	for( int i = 0; i < hdr->numbones; i++ )
+	{
+		int v = 0;
+		for( int k = i; k >= 0; k = pbones[k].parent )
+		{
+			if( boneP[k] >= 0 ) { v = boneP[k]; break; }
+		}
+		b->boneVert[i] = v;
+		b->bonePart[i] = partOf[v];
+	}
+
+	return true;
+}
+
+/*
+================
+simulation
+================
+*/
+static Vector RD_Forward( const Vector *p )
+{
+	Vector up = p[J_CHEST] - p[J_PELVIS];
+	Vector right = p[J_RHIP] - p[J_LHIP];
+	Vector f = CrossProduct( up, right );
+	return f.Length() > 0.001f ? f.Normalize() : Vector( 1, 0, 0 );
+}
+
+static Vector RD_JointOffset( const Vector *p, int a, int mid, int c )
+{
+	Vector line = p[c] - p[a];
+	float len2 = DotProduct( line, line );
+	if( len2 < 0.001f )
+		return Vector( 0, 0, 0 );
+	float t = DotProduct( p[mid] - p[a], line ) / len2;
+	return p[mid] - ( p[a] + line * t );
+}
+
+static void RD_Throw( rdBody_t *b, const Vector &hit, const Vector &push, const Vector &vel )
+{
+	// most of the push where it hit, passed on through the body with distance
+	for( int n = 0; n < b->np; n++ )
+	{
+		float d = ( b->p[n] - hit ).Length();
+		float w = 0.3f + 0.9f * expf( -d / 14.0f );
+		Vector v = vel + push * w;
+		b->o[n] = b->p[n] - v * RD_STEP;
+	}
+}
+
+static void RD_Collide( rdBody_t *b, int n )
+{
+	pmtrace_t tr;
+	Vector from = b->safe[n], to = b->p[n];
+
+	b->contact[n] = false;
+
+	if(( to - from ).Length() > 0.01f )
+	{
+		gEngfuncs.pEventAPI->EV_SetTraceHull( 2 );
+		gEngfuncs.pEventAPI->EV_PlayerTrace( from, to, PM_WORLD_ONLY, -1, &tr );
+
+		if( tr.allsolid )
+		{
+			b->p[n] = b->o[n] = from;
+			return;
+		}
+
+		if( tr.fraction < 1.0f )
+		{
+			Vector nrm = Vector( tr.plane.normal );
+			Vector hit = Vector( tr.endpos ) + nrm * 0.25f;
+			Vector v = b->p[n] - b->o[n];
+			Vector vt = v - nrm * DotProduct( v, nrm );
+
+			b->p[n] = hit;
+			b->o[n] = hit - vt * RD_GROUND_KEEP;
+			b->contact[n] = true;
+		}
+	}
+
+	// keep the particle's own thickness off whatever is under it
+	if( b->radius[n] > 0.5f )
+	{
+		Vector down = b->p[n] - Vector( 0.0f, 0.0f, b->radius[n] );
+		gEngfuncs.pEventAPI->EV_SetTraceHull( 2 );
+		gEngfuncs.pEventAPI->EV_PlayerTrace( b->p[n], down, PM_WORLD_ONLY, -1, &tr );
+		if( !tr.startsolid && tr.fraction < 1.0f )
+		{
+			float lift = b->radius[n] * ( 1.0f - tr.fraction );
+			b->p[n].z += lift;
+			b->o[n].z += lift;   // resting, not bouncing
+			Vector v = b->p[n] - b->o[n];
+			b->o[n].x = b->p[n].x - v.x * RD_GROUND_KEEP;
+			b->o[n].y = b->p[n].y - v.y * RD_GROUND_KEEP;
+			b->contact[n] = true;
+		}
+	}
+
+	b->safe[n] = b->p[n];
+}
+
+static void RD_Constrain( rdBody_t *b )
+{
+	for( int it = 0; it < RD_ITER; it++ )
+	{
+		for( int i = 0; i < b->nl; i++ )
+		{
+			rdLink *l = &b->links[i];
+			Vector &a = b->p[l->a];
+			Vector &c = b->p[l->b];
+			Vector d = c - a;
+			float len = d.Length();
+
+			if( len < 0.001f || ( len >= l->lo && len <= l->hi ))
+				continue;
+
+			float target = len < l->lo ? l->lo : l->hi;
+			Vector corr = d * ( 0.5f * ( len - target ) / len );
+			a = a + corr;
+			c = c - corr;
+		}
+
+		// limbs keep out of each other and the torso
+		for( int i = 0; i < b->np; i++ )
+		{
+			for( int j = i + 1; j < b->np; j++ )
+			{
+				float r = ( b->radius[i] + b->radius[j] ) * 0.8f;
+				Vector d = b->p[j] - b->p[i];
+				float len = d.Length();
+				float rest = ( b->restP[j] - b->restP[i] ).Length();
+
+				// neighbours that start out overlapping are allowed to
+				if( len >= r || rest < r || len < 0.001f )
+					continue;
+
+				Vector corr = d * ( 0.25f * ( r - len ) / len );
+				b->p[i] = b->p[i] - corr;
+				b->p[j] = b->p[j] + corr;
+			}
+		}
+
+		if( b->human )
+		{
+			Vector fwd = RD_Forward( b->p );
+			Vector up = ( b->p[J_CHEST] - b->p[J_PELVIS] ).Normalize();
+
+			// knees bend the way they did at death (forward if straight)
+			static const int legs[2][3] = { { J_LHIP, J_LKNEE, J_LFOOT }, { J_RHIP, J_RKNEE, J_RFOOT } };
+			for( int k = 0; k < 2; k++ )
+			{
+				Vector off = RD_JointOffset( b->p, legs[k][0], legs[k][1], legs[k][2] );
+				float side = DotProduct( off, fwd ) * b->kneeSide;
+				// ease it back to straight, never flip it: a flip adds energy
+				if( side < 0.0f )
+					b->p[legs[k][1]] = b->p[legs[k][1]] - fwd * ( 0.5f * side * b->kneeSide );
+			}
+
+			// elbows point back while the arm hangs
+			static const int arms[2][3] = { { J_LSHOULDER, J_LELBOW, J_LHAND }, { J_RSHOULDER, J_RELBOW, J_RHAND } };
+			for( int k = 0; k < 2; k++ )
+			{
+				Vector upper = ( b->p[arms[k][1]] - b->p[arms[k][0]] ).Normalize();
+				if( DotProduct( upper, up ) > -0.3f )
+					continue;
+				Vector off = RD_JointOffset( b->p, arms[k][0], arms[k][1], arms[k][2] );
+				float side = DotProduct( off, fwd );
+				if( side > 0.0f )
+					b->p[arms[k][1]] = b->p[arms[k][1]] - fwd * ( 0.5f * side );
+			}
+
+			// legs swing forward freely, only a little backward
+			static const int hips[2][2] = { { J_LHIP, J_LKNEE }, { J_RHIP, J_RKNEE } };
+			for( int k = 0; k < 2; k++ )
+			{
+				Vector thigh = b->p[hips[k][1]] - b->p[hips[k][0]];
+				float len = thigh.Length();
+				if( len < 0.001f )
+					continue;
+				Vector dir = thigh / len;
+				float back = -DotProduct( dir, fwd );
+				// past ~35 degrees behind the body
+				if( back > 0.57f )
+				{
+					Vector fix = dir + fwd * ( 0.5f * ( back - 0.57f ));
+					b->p[hips[k][1]] = b->p[hips[k][0]] + fix.Normalize() * len;
+				}
+			}
+		}
+	}
+}
+
+static void RD_Step( rdBody_t *b )
+{
+	float moved = 0.0f;
+
+	for( int n = 0; n < b->np; n++ )
+		b->prev[n] = b->p[n];
+
+	// joints are a little stiff: linked particles share some of their speed
+	for( int i = 0; i < b->nl; i++ )
+	{
+		rdLink *l = &b->links[i];
+		if( !l->limb )
+			continue;
+		Vector va = b->p[l->a] - b->o[l->a];
+		Vector vc = b->p[l->b] - b->o[l->b];
+		Vector dv = ( vc - va ) * RD_JOINT_FRIC;
+		b->o[l->a] = b->o[l->a] - dv;
+		b->o[l->b] = b->o[l->b] + dv;
+	}
+
+	// once it has landed, the body winds down instead of fidgeting forever
+	float since = gEngfuncs.GetClientTime() - b->wake;
+	float settle = since < 1.5f ? 0.0f : Q_min(( since - 1.5f ) / 2.0f, 1.0f );
+
+	for( int n = 0; n < b->np; n++ )
+	{
+		Vector cur = b->p[n];
+		float keep = b->contact[n] ? RD_CONTACT_KEEP : RD_AIR_DRAG;
+		keep *= 1.0f - 0.25f * settle;
+		Vector v = ( b->p[n] - b->o[n] ) * keep;
+
+		b->o[n] = cur;
+		b->p[n] = cur + v + Vector( 0.0f, 0.0f, -RD_GRAVITY * RD_STEP * RD_STEP );
+	}
+
+	// hold together, then settle on the world: the world has the last word
+	RD_Constrain( b );
+	for( int n = 0; n < b->np; n++ )
+		RD_Collide( b, n );
+
+	for( int n = 0; n < b->np; n++ )
+		moved = Q_max( moved, ( b->p[n] - b->o[n] ).Length());
+
+	if( moved < RD_SETTLE )
+		b->rest_time += RD_STEP;
+	else b->rest_time = 0.0f;
+
+	if( b->rest_time > RD_REST_TIME || gEngfuncs.GetClientTime() - b->wake > RD_MAX_TIME )
+	{
+		b->moving = false;
+		for( int n = 0; n < b->np; n++ )
+			b->prev[n] = b->p[n];
+	}
+}
+
+/*
+================
+messages
+================
+*/
 static rdBody_t *RD_Find( int ent )
 {
 	for( int i = 0; i < RD_MAX; i++ )
@@ -201,19 +789,22 @@ static rdBody_t *RD_Find( int ent )
 	return NULL;
 }
 
+static Vector RD_ReadVec( void )
+{
+	Vector v;
+	v.x = READ_COORD();
+	v.y = READ_COORD();
+	v.z = READ_COORD();
+	return v;
+}
+
 static int MsgFunc_XBRagdoll( const char *pszName, int iSize, void *pbuf )
 {
 	BEGIN_READ( pbuf, iSize );
 	int ent = READ_SHORT();
-	Vector dir;
-	dir.x = READ_COORD();
-	dir.y = READ_COORD();
-	dir.z = READ_COORD();
-	int force = READ_BYTE();
-	int hitgroup = READ_BYTE();
+	int kind = READ_BYTE();
 
-	// 255: the entity (re)spawned alive, drop any ragdoll it had
-	if( hitgroup == 255 )
+	if( kind == XB_RD_CLEAR )
 	{
 		rdBody_t *old = RD_Find( ent );
 		if( old )
@@ -221,10 +812,45 @@ static int MsgFunc_XBRagdoll( const char *pszName, int iSize, void *pbuf )
 		return 1;
 	}
 
+	Vector hit = RD_ReadVec();
+	Vector push = RD_ReadVec();
+
+	if( kind == XB_RD_HIT )
+	{
+		rdBody_t *b = RD_Find( ent );
+		if( !b || !xb_ragdoll || !xb_ragdoll->value )
+			return 1;
+
+		if( !b->started )
+		{
+			// hit again before it was drawn: add to the death push
+			b->push = b->push + push;
+			return 1;
+		}
+
+		// shot while down: wake it and shove it
+		for( int n = 0; n < b->np; n++ )
+		{
+			float d = ( b->p[n] - hit ).Length();
+			float w = 0.15f + 0.9f * expf( -d / 12.0f );
+			b->o[n] = b->o[n] - push * ( w * RD_STEP );
+			b->prev[n] = b->p[n];
+		}
+		b->moving = true;
+		b->rest_time = 0.0f;
+		b->accum = 0.0f;
+		b->wake = gEngfuncs.GetClientTime();
+		b->lastTime = b->wake;
+		return 1;
+	}
+
+	Vector vel = RD_ReadVec();
+	READ_BYTE(); // hitgroup: the hit position says more
+
 	if( !xb_ragdoll || !xb_ragdoll->value )
 		return 1;
 
-	gEngfuncs.Con_DPrintf( "ragdoll: ent %d died (force %d, hitgroup %d)\n", ent, force, hitgroup );
+	gEngfuncs.Con_DPrintf( "ragdoll: ent %d died (push %.0f)\n", ent, push.Length());
 
 	rdBody_t *b = RD_Find( ent );
 	if( !b )
@@ -241,20 +867,11 @@ static int MsgFunc_XBRagdoll( const char *pszName, int iSize, void *pbuf )
 	memset( b, 0, sizeof( *b ));
 	b->used = true;
 	b->ent = ent;
-	b->spawned = gEngfuncs.GetClientTime();
-	b->impulse = dir.Normalize() * (float)force;
-
-	switch( hitgroup )
-	{
-	case HITGROUP_HEAD:     b->hitJoint = J_HEAD; break;
-	case HITGROUP_STOMACH:  b->hitJoint = J_PELVIS; break;
-	case HITGROUP_LEFTARM:  b->hitJoint = J_LELBOW; break;
-	case HITGROUP_RIGHTARM: b->hitJoint = J_RELBOW; break;
-	case HITGROUP_LEFTLEG:  b->hitJoint = J_LKNEE; break;
-	case HITGROUP_RIGHTLEG: b->hitJoint = J_RKNEE; break;
-	default:                b->hitJoint = J_CHEST; break;
-	}
-
+	b->spawned = b->wake = gEngfuncs.GetClientTime();
+	b->hitPos = hit;
+	b->push = push;
+	b->vel = vel;
+	b->havePush = true;
 	return 1;
 }
 
@@ -270,284 +887,47 @@ void XBRagdoll_Reset( void )
 	memset( s_bodies, 0, sizeof( s_bodies ));
 }
 
-static inline Vector RD_BonePos( const float m[3][4] )
-{
-	return Vector( m[0][3], m[1][3], m[2][3] );
-}
-
-// orthonormal basis (columns) from a part's joints
-static void RD_Basis( const Vector &a, const Vector &axisEnd, const Vector &ref, float m[3][3] )
-{
-	Vector x = ( axisEnd - a ).Normalize();
-	Vector r = ref - a;
-	Vector z = CrossProduct( x, r );
-
-	if( z.Length() < 0.001f )
-		z = CrossProduct( x, fabs( x.z ) < 0.9f ? Vector( 0, 0, 1 ) : Vector( 1, 0, 0 ));
-	z = z.Normalize();
-
-	Vector y = CrossProduct( z, x );
-
-	for( int i = 0; i < 3; i++ )
-	{
-		m[i][0] = x[i];
-		m[i][1] = y[i];
-		m[i][2] = z[i];
-	}
-}
-
-// the way the torso faces
-static Vector RD_Forward( const Vector *p )
-{
-	Vector up = p[J_CHEST] - p[J_PELVIS];
-	Vector right = p[J_RHIP] - p[J_LHIP];
-	Vector f = CrossProduct( up, right );
-	return f.Length() > 0.001f ? f.Normalize() : Vector( 1, 0, 0 );
-}
-
-// how far a knee sticks out from the hip-foot line
-static Vector RD_KneeOffset( const Vector *p, int hip, int knee, int foot )
-{
-	Vector a = p[hip], c = p[foot];
-	Vector line = c - a;
-	float len2 = DotProduct( line, line );
-	if( len2 < 0.001f )
-		return Vector( 0, 0, 0 );
-	float t = DotProduct( p[knee] - a, line ) / len2;
-	return p[knee] - ( a + line * t );
-}
-
+/*
+================
+start
+================
+*/
 static bool RD_Start( rdBody_t *b, cl_entity_t *ent, studiohdr_t *hdr, float (*bones)[MAXSTUDIOBONES][3][4] )
 {
-	mstudiobone_t *pbones = (mstudiobone_t *)((byte *)hdr + hdr->boneindex);
-
 	b->numbones = hdr->numbones;
-
-	char keys[MAXSTUDIOBONES][32];
-	const char *key[MAXSTUDIOBONES];
-
-	for( int i = 0; i < hdr->numbones && i < MAXSTUDIOBONES; i++ )
-		key[i] = RD_BoneKey( pbones[i].name, keys[i], sizeof( keys[i] ));
-
-	for( int j = 0; j < J_NUM; j++ )
-	{
-		b->jointBone[j] = -1;
-		for( int n = 0; n < RD_NAMES && s_jointBones[j][n] && b->jointBone[j] < 0; n++ )
-		{
-			for( int i = 0; i < hdr->numbones; i++ )
-			{
-				if( !key[i] || strcmp( key[i], s_jointBones[j][n] ))
-					continue;
-
-				// one bone can't be two joints (a model with no pelvis but a "spine")
-				bool taken = false;
-				for( int k = 0; k < j; k++ )
-					if( b->jointBone[k] == i ) taken = true;
-
-				if( !taken )
-				{
-					b->jointBone[j] = i;
-					break;
-				}
-			}
-		}
-
-		if( b->jointBone[j] < 0 )
-		{
-			static model_t *s_reported[16];
-			bool reported = false;
-
-			for( int r = 0; r < 16; r++ )
-			{
-				if( s_reported[r] == ent->model ) { reported = true; break; }
-				if( !s_reported[r] ) { s_reported[r] = ent->model; break; }
-			}
-
-			gEngfuncs.Con_DPrintf( "ragdoll: ent %d (%s) has no %s bone, keeps its death animation\n", ent->index, ent->model ? ent->model->name : "?", s_jointBones[j][0] );
-
-			// once per model, list its skeleton so the names can be added
-			if( !reported )
-			{
-				for( int i = 0; i < hdr->numbones; i++ )
-					gEngfuncs.Con_DPrintf( "ragdoll:   bone %d \"%s\" parent %d\n", i, pbones[i].name, pbones[i].parent );
-			}
-			return false; // not a human skeleton
-		}
-	}
-
-	// every bone moves with the part of its nearest joint ancestor
-	for( int i = 0; i < hdr->numbones; i++ )
-	{
-		int seg = S_PELVIS;
-
-		for( int k = i; k >= 0; k = pbones[k].parent )
-		{
-			int j;
-			for( j = 0; j < J_NUM; j++ )
-				if( b->jointBone[j] == k ) break;
-
-			if( j < J_NUM )
-			{
-				seg = s_jointSeg[j];
-				break;
-			}
-		}
-		b->boneSeg[i] = seg;
-	}
-
 	memcpy( b->rest, *bones, sizeof( float ) * 12 * hdr->numbones );
 
-	float now = gEngfuncs.GetClientTime();
-
-	for( int j = 0; j < J_NUM; j++ )
+	if( !RD_BuildHuman( b, hdr ) && !RD_BuildGeneric( b, hdr ))
 	{
-		b->restJoint[j] = RD_BonePos( b->rest[b->jointBone[j]] );
-		b->p[j] = b->restJoint[j];
-
-		// the hit throws the body: hardest where it was hit, some everywhere
-		float share = ( j == b->hitJoint ) ? 0.7f : 0.4f;
-		b->o[j] = b->p[j] - b->impulse * share * RD_STEP;
+		gEngfuncs.Con_DPrintf( "ragdoll: ent %d (%s) has no usable skeleton\n", ent->index, ent->model ? ent->model->name : "?" );
+		return false;
 	}
 
-	for( unsigned l = 0; l < RD_NUM_LINKS; l++ )
-		b->linkLen[l] = ( b->restJoint[s_links[l][0]] - b->restJoint[s_links[l][1]] ).Length();
-
-	for( int j = 0; j < J_NUM; j++ )
-		b->safe[j] = b->restJoint[j];
-
-	// each part's starting frame; limbs then carry their twist along
-	for( int sg = 0; sg < S_NUM; sg++ )
+	for( int n = 0; n < b->np; n++ )
 	{
-		RD_Basis( b->restJoint[s_segs[sg][0]], b->restJoint[s_segs[sg][1]], b->restJoint[s_segs[sg][2]], b->restBasis[sg] );
-		b->segZ[sg] = Vector( b->restBasis[sg][0][2], b->restBasis[sg][1][2], b->restBasis[sg][2][2] );
+		b->p[n] = b->prev[n] = b->safe[n] = b->restP[n];
+		b->o[n] = b->p[n];
 	}
 
-	// knees keep bending the way they did when he died, forward if straight
+	if( b->human )
 	{
-		Vector fwd = RD_Forward( b->restJoint );
-		float side = DotProduct( RD_KneeOffset( b->restJoint, J_LHIP, J_LKNEE, J_LFOOT ), fwd )
-			+ DotProduct( RD_KneeOffset( b->restJoint, J_RHIP, J_RKNEE, J_RFOOT ), fwd );
+		Vector fwd = RD_Forward( b->restP );
+		float side = DotProduct( RD_JointOffset( b->restP, J_LHIP, J_LKNEE, J_LFOOT ), fwd )
+			+ DotProduct( RD_JointOffset( b->restP, J_RHIP, J_RKNEE, J_RFOOT ), fwd );
 		b->kneeSide = side < -0.5f ? -1.0f : 1.0f;
 	}
 
-	gEngfuncs.Con_DPrintf( "ragdoll: ent %d (%s) started, %d bones\n", ent->index, ent->model ? ent->model->name : "?", hdr->numbones );
+	if( b->havePush )
+		RD_Throw( b, b->hitPos, b->push, b->vel );
+
+	gEngfuncs.Con_DPrintf( "ragdoll: ent %d (%s) started, %s, %d particles %d links\n", ent->index,
+		ent->model ? ent->model->name : "?", b->human ? "human" : "generic", b->np, b->nl );
 
 	b->model = ent->model;
-	b->sequence = ent->curstate.sequence;
 	b->started = true;
 	b->moving = true;
-	b->lastTime = now;
+	b->lastTime = gEngfuncs.GetClientTime();
 	return true;
-}
-
-static void RD_Collide( rdBody_t *b, int j )
-{
-	pmtrace_t tr;
-	Vector from = b->safe[j], to = b->p[j];
-
-	if(( to - from ).Length() < 0.01f )
-		return;
-
-	gEngfuncs.pEventAPI->EV_SetTraceHull( 2 );
-	gEngfuncs.pEventAPI->EV_PlayerTrace( from, to, PM_WORLD_ONLY, -1, &tr );
-
-	if( tr.allsolid )
-	{
-		// the safe spot itself is buried (a door closed on him): hold still
-		b->p[j] = b->o[j] = from;
-		return;
-	}
-
-	if( tr.fraction < 1.0f )
-	{
-		Vector n = Vector( tr.plane.normal );
-		Vector hit = Vector( tr.endpos ) + n * 0.5f;
-		Vector vel = b->p[j] - b->o[j];
-		float into = DotProduct( vel, n );
-		Vector vn = n * into;
-		Vector vt = vel - vn;
-
-		b->p[j] = hit;
-		// slide with friction, no bounce: kills the jitter on the floor
-		b->o[j] = hit - vt * RD_FRICTION;
-	}
-
-	b->safe[j] = b->p[j];
-}
-
-static void RD_Constrain( rdBody_t *b, int iterations )
-{
-	for( int it = 0; it < iterations; it++ )
-	{
-		for( unsigned l = 0; l < RD_NUM_LINKS; l++ )
-		{
-			Vector &a = b->p[s_links[l][0]];
-			Vector &c = b->p[s_links[l][1]];
-			Vector d = c - a;
-			float len = d.Length();
-			float target = b->linkLen[l];
-
-			if( len < 0.001f )
-				continue;
-
-			// range links only push back outside their range
-			if( l >= RD_FIRST_REACH )
-			{
-				float lo = target * s_reachMin[l - RD_FIRST_REACH];
-				if( len >= lo && len <= target )
-					continue;
-				target = len < lo ? lo : target;
-			}
-
-			Vector corr = d * ( 0.5f * ( len - target ) / len );
-			a = a + corr;
-			c = c - corr;
-		}
-
-		// knees only bend one way
-		Vector fwd = RD_Forward( b->p );
-		static const int legs[2][3] = { { J_LHIP, J_LKNEE, J_LFOOT }, { J_RHIP, J_RKNEE, J_RFOOT } };
-		for( int k = 0; k < 2; k++ )
-		{
-			Vector off = RD_KneeOffset( b->p, legs[k][0], legs[k][1], legs[k][2] );
-			float side = DotProduct( off, fwd ) * b->kneeSide;
-			if( side < 0.0f )
-				b->p[legs[k][1]] = b->p[legs[k][1]] - fwd * ( 2.0f * side * b->kneeSide );
-		}
-	}
-}
-
-static void RD_Step( rdBody_t *b )
-{
-	float moved = 0.0f;
-
-	for( int j = 0; j < J_NUM; j++ )
-	{
-		Vector cur = b->p[j];
-		Vector vel = ( b->p[j] - b->o[j] ) * RD_DRAG;
-
-		b->o[j] = cur;
-		b->p[j] = cur + vel + Vector( 0.0f, 0.0f, -RD_GRAVITY * RD_STEP * RD_STEP );
-	}
-
-	// hold together, settle on the world, hold together again, settle again:
-	// the last word always goes to the world so nothing ends up inside a wall
-	RD_Constrain( b, RD_ITER );
-	for( int j = 0; j < J_NUM; j++ )
-		RD_Collide( b, j );
-	RD_Constrain( b, RD_ITER / 2 );
-	for( int j = 0; j < J_NUM; j++ )
-	{
-		RD_Collide( b, j );
-		moved = Q_max( moved, ( b->p[j] - b->o[j] ).Length());
-	}
-
-	if( moved < RD_SETTLE )
-		b->rest_time += RD_STEP;
-	else b->rest_time = 0.0f;
-
-	if( b->rest_time > RD_REST_TIME || gEngfuncs.GetClientTime() - b->spawned > RD_MAX_TIME )
-		b->moving = false;
 }
 
 /*
@@ -576,9 +956,15 @@ void XBRagdoll_Apply( cl_entity_t *ent, void *studiohdr, float (*bones)[MAXSTUDI
 		return;
 	}
 
+	if( hdr->numbones > MAXSTUDIOBONES )
+	{
+		b->used = false;
+		return;
+	}
+
 	if( !b->started )
 	{
-		// count bodies already moving: past the limit the oldest one freezes
+		// past the limit the oldest moving body freezes
 		int moving = 0;
 		rdBody_t *oldest = NULL;
 
@@ -587,7 +973,7 @@ void XBRagdoll_Apply( cl_entity_t *ent, void *studiohdr, float (*bones)[MAXSTUDI
 			if( s_bodies[i].used && s_bodies[i].moving )
 			{
 				moving++;
-				if( !oldest || s_bodies[i].spawned < oldest->spawned )
+				if( !oldest || s_bodies[i].wake < oldest->wake )
 					oldest = &s_bodies[i];
 			}
 		}
@@ -600,6 +986,8 @@ void XBRagdoll_Apply( cl_entity_t *ent, void *studiohdr, float (*bones)[MAXSTUDI
 			return;
 		}
 	}
+
+	float blend = 1.0f;
 
 	if( b->moving )
 	{
@@ -623,37 +1011,40 @@ void XBRagdoll_Apply( cl_entity_t *ent, void *studiohdr, float (*bones)[MAXSTUDI
 
 			gEngfuncs.pEventAPI->EV_PopPMStates();
 		}
+
+		// draw between the last two steps so motion is smooth at any frame rate
+		blend = b->moving ? b->accum / RD_STEP : 1.0f;
 	}
 
-	// rotation of every part from the death pose to now
-	float rot[S_NUM][3][3];
-	for( int s = 0; s < S_NUM; s++ )
-	{
-		float ( *restM )[3] = b->restBasis[s];
-		float nowM[3][3];
-		const int *sg = s_segs[s];
+	Vector pos[RD_MAX_P];
+	for( int n = 0; n < b->np; n++ )
+		pos[n] = b->prev[n] + ( b->p[n] - b->prev[n] ) * blend;
 
-		if( s == S_PELVIS || s == S_CHEST )
+	// rotation of every part from the death pose to now
+	float rot[RD_MAX_PARTS][3][3];
+	for( int s = 0; s < b->nparts; s++ )
+	{
+		rdPart *pt = &b->parts[s];
+		float nowM[3][3];
+
+		if( pt->ref >= 0 )
 		{
-			// the torso is braced solid, its reference joints never line up
-			RD_Basis( b->p[sg[0]], b->p[sg[1]], b->p[sg[2]], nowM );
+			RD_Basis( pos[pt->org], pos[pt->axis], pos[pt->ref], nowM );
 		}
 		else
 		{
-			// limbs: keep last frame's twist, only turned onto the new bone axis,
-			// so an arm lining up with the shoulders can't flip over
-			Vector x = b->p[sg[1]] - b->p[sg[0]];
+			// keep last frame's twist, only turned onto the new bone axis,
+			// so a limb lining up with its reference can't flip over
+			Vector x = pos[pt->axis] - pos[pt->org];
 			if( x.Length() < 0.001f )
-				x = Vector( restM[0][0], restM[1][0], restM[2][0] );
+				x = Vector( pt->rest[0][0], pt->rest[1][0], pt->rest[2][0] );
 			x = x.Normalize();
 
-			Vector z = b->segZ[s] - x * DotProduct( b->segZ[s], x );
+			Vector z = pt->z - x * DotProduct( pt->z, x );
 			if( z.Length() < 0.01f )
-				z = CrossProduct( x, b->p[sg[2]] - b->p[sg[0]] );
-			if( z.Length() < 0.001f )
 				z = CrossProduct( x, fabs( x.z ) < 0.9f ? Vector( 0, 0, 1 ) : Vector( 1, 0, 0 ));
 			z = z.Normalize();
-			b->segZ[s] = z;
+			pt->z = z;
 
 			Vector y = CrossProduct( z, x );
 			for( int i = 0; i < 3; i++ )
@@ -667,17 +1058,17 @@ void XBRagdoll_Apply( cl_entity_t *ent, void *studiohdr, float (*bones)[MAXSTUDI
 		// rot = now * rest^T
 		for( int i = 0; i < 3; i++ )
 			for( int k = 0; k < 3; k++ )
-				rot[s][i][k] = nowM[i][0] * restM[k][0] + nowM[i][1] * restM[k][1] + nowM[i][2] * restM[k][2];
+				rot[s][i][k] = nowM[i][0] * pt->rest[k][0] + nowM[i][1] * pt->rest[k][1] + nowM[i][2] * pt->rest[k][2];
 	}
 
 	for( int i = 0; i < b->numbones; i++ )
 	{
-		int s = b->boneSeg[i];
+		int s = b->bonePart[i];
+		int org = b->parts[s].org;
 		const float ( *R )[3] = rot[s];
 		const float ( *M )[4] = b->rest[i];
-		Vector restOrigin = b->restJoint[s_segs[s][0]];
-		Vector nowOrigin = b->p[s_segs[s][0]];
-		Vector rel = RD_BonePos( M ) - restOrigin;
+		Vector rel = RD_BonePos( M ) - b->restP[org];
+		Vector now = pos[org];
 		float out[3][4];
 
 		for( int r = 0; r < 3; r++ )
@@ -685,7 +1076,7 @@ void XBRagdoll_Apply( cl_entity_t *ent, void *studiohdr, float (*bones)[MAXSTUDI
 			for( int c = 0; c < 3; c++ )
 				out[r][c] = R[r][0] * M[0][c] + R[r][1] * M[1][c] + R[r][2] * M[2][c];
 
-			out[r][3] = R[r][0] * rel.x + R[r][1] * rel.y + R[r][2] * rel.z + nowOrigin[r];
+			out[r][3] = R[r][0] * rel.x + R[r][1] * rel.y + R[r][2] * rel.z + now[r];
 		}
 
 		memcpy( (*bones)[i], out, sizeof( out ));
@@ -698,7 +1089,7 @@ void XBRagdoll_Apply( cl_entity_t *ent, void *studiohdr, float (*bones)[MAXSTUDI
 =============
 XBRagdoll_BodyPelvis
 
-Where a ragdolled body's pelvis is, for the blood pool under it.
+Where a ragdolled body's middle is, for the blood pool under it.
 =============
 */
 bool XBRagdoll_BodyPelvis( int ent, float *out, bool *settled )
@@ -708,9 +1099,9 @@ bool XBRagdoll_BodyPelvis( int ent, float *out, bool *settled )
 	if( !b || !b->started )
 		return false;
 
-	out[0] = b->p[J_PELVIS].x;
-	out[1] = b->p[J_PELVIS].y;
-	out[2] = b->p[J_PELVIS].z;
+	out[0] = b->p[0].x;
+	out[1] = b->p[0].y;
+	out[2] = b->p[0].z;
 	*settled = !b->moving;
 	return true;
 }

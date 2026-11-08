@@ -90,6 +90,8 @@ static float s_lastTime;
 // footprints
 static Vector s_lastStep;
 static int s_bloodySteps;
+static bool s_footYellow;   // colour of the pool the trail came from
+#define XB_TRAIL_STEPS 10
 static bool s_leftFoot;
 
 bool XBRagdoll_BodyPelvis( int ent, float *out, bool *settled );
@@ -169,10 +171,15 @@ static void XB_AddSplat( const Vector &org, const Vector &normal, const Vector &
 	m->yellow = yellow;
 }
 
-static void XB_AddFoot( const Vector &org, const Vector &normal, const Vector &forward, bool left, float alpha, bool yellow )
+static void XB_AddFoot( const Vector &org, const Vector &normal, const Vector &fwd, bool left, float alpha, bool yellow, int stage )
 {
 	xbMark_t *m = &s_feet[s_nextFoot];
 	s_nextFoot = ( s_nextFoot + 1 ) % MAX_FEET;
+
+	// each step lands a little differently
+	float yaw = RandF( -0.14f, 0.14f ) + ( left ? 0.05f : -0.05f );
+	Vector side = CrossProduct( normal, fwd );
+	Vector forward = fwd * cosf( yaw ) + side * sinf( yaw );
 
 	Vector right, up;
 	XB_PlaneAxes( normal, forward, right, up );
@@ -184,7 +191,18 @@ static void XB_AddFoot( const Vector &org, const Vector &normal, const Vector &f
 	m->up = up * -9.0f;           // sprite's toe is at the top
 	m->born = s_lastTime;
 	m->alpha = alpha;
-	m->frame = left ? 0 : 1;
+	// the sole runs dry: full prints, then only toe or heel, then smudges
+	// frames: 0-1 full, 2-3 toe, 4-5 heel, 6-7 smudge (left, right)
+	int kind;
+	if( stage >= 8 )
+		kind = 0;
+	else if( stage >= 5 )
+		kind = gEngfuncs.pfnRandomLong( 0, 2 );
+	else if( stage >= 3 )
+		kind = gEngfuncs.pfnRandomLong( 1, 3 );
+	else
+		kind = 3;
+	m->frame = kind * 2 + ( left ? 0 : 1 );
 	m->yellow = yellow;
 }
 
@@ -331,7 +349,6 @@ static void XB_UpdateFootprints( void )
 
 	Vector floor = Vector( tr.endpos );
 	Vector normal = Vector( tr.plane.normal );
-	bool yellow = false;
 
 	// stepped in a pool: the next steps carry blood
 	for( int i = 0; i < MAX_POOLS; i++ )
@@ -343,8 +360,8 @@ static void XB_UpdateFootprints( void )
 		Vector d = floor - p->org;
 		if( fabs( d.z ) < 16.0f && d.Make2D().Length() < XB_PoolRadius( p ) * 0.8f )
 		{
-			s_bloodySteps = 12;
-			yellow = p->yellow;
+			s_bloodySteps = XB_TRAIL_STEPS;
+			s_footYellow = p->yellow;
 			break;
 		}
 	}
@@ -352,7 +369,8 @@ static void XB_UpdateFootprints( void )
 	if( s_bloodySteps <= 0 )
 		return;
 
-	XB_AddFoot( floor, normal, forward, s_leftFoot, 0.25f + 0.65f * ( s_bloodySteps / 12.0f ), yellow );
+	float wet = s_bloodySteps / (float)XB_TRAIL_STEPS;
+	XB_AddFoot( floor, normal, forward, s_leftFoot, 0.35f + 0.6f * wet, s_footYellow, s_bloodySteps );
 	s_leftFoot = !s_leftFoot;
 	s_bloodySteps--;
 }

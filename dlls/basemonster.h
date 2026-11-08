@@ -87,6 +87,13 @@ public:
 	BYTE m_rgbTimeBasedDamage[CDMG_TIMEBASED];
 
 	int m_lastDamageAmount;// how much damage did monster (player) last take
+#if XASH_UWP
+	// Xbox gore/ragdolls: the last hit, not saved (only matters the frame it happens)
+	float m_xbLastDamage;
+	int m_xbLastDmgType;
+	Vector m_xbLastHitPos;
+	Vector m_xbLastShotDir;
+#endif
 										// time based damage counters, decr. 1 per 2 seconds
 	int m_bloodColor;		// color of blood particless
 

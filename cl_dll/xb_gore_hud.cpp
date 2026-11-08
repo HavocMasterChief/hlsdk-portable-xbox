@@ -30,6 +30,12 @@ DECLARE_MESSAGE( m_XBGore, XBGore )
 int CHudXBGore::Init( void )
 {
 	HOOK_MESSAGE( XBGore );
+
+	// Blood mode lives here, not in the game dll: the client dll loads before
+	// config.cfg runs, so a saved choice is there to receive it. The game dll
+	// reads it by name (dlls/xb_gore.cpp XBGore_Mode).
+	gEngfuncs.pfnRegisterVariable( "xb_blood", "1", FCVAR_ARCHIVE );
+
 	XBGoreWorld_Init();
 	XBRagdoll_Init();
 

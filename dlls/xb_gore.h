@@ -34,7 +34,8 @@ void XBGore_Gibbed( CBaseMonster *pMonster );
 void XBGore_Frame( void );               // from StartFrame
 void XBGore_LevelStart( void );
 
-void XBRagdoll_Send( CBaseMonster *pMonster );   // body becomes a ragdoll (cl_dll/xb_ragdoll.cpp)
+void XBRagdoll_Send( CBaseMonster *pMonster );
+void XBRagdoll_Hit( CBaseMonster *pMonster, entvars_t *pevInflictor );  // a body already down is shot   // body becomes a ragdoll (cl_dll/xb_ragdoll.cpp)
 
 extern int gmsgXBGore;
 extern int gmsgXBRagdoll;

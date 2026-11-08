@@ -39,7 +39,10 @@ when a list is full, the oldest effect is replaced.
 
 #if XASH_UWP
 
-static cvar_t xb_blood = { "xb_blood", "1", FCVAR_ARCHIVE };
+// xb_blood belongs to the client dll (cl_dll/xb_gore_hud.cpp): it exists from
+// launch, before config.cfg runs, so the menu choice survives a restart. A cvar
+// registered here would only appear when a map starts, after config.cfg.
+static cvar_t *xb_blood;
 
 int gmsgXBGore = 0;
 int gmsgXBRagdoll = 0;
@@ -132,12 +135,15 @@ static xbTracked_t s_tracked[MAX_TRACKED];
 
 void XBGore_RegisterCvars( void )
 {
-	CVAR_REGISTER( &xb_blood );
+	xb_blood = CVAR_GET_POINTER( "xb_blood" );
 }
 
 int XBGore_Mode( void )
 {
-	int mode = (int)xb_blood.value;
+	if( !xb_blood )
+		xb_blood = CVAR_GET_POINTER( "xb_blood" );
+
+	int mode = xb_blood ? (int)xb_blood->value : XB_BLOOD_DEFAULT;
 
 	if( mode < XB_BLOOD_OFF || mode > XB_BLOOD_EXTREME )
 		mode = XB_BLOOD_DEFAULT;
@@ -358,10 +364,17 @@ void XBGore_Gibbed( CBaseMonster *pMonster )
 {
 	int color = pMonster->BloodColor();
 
-	if( color == DONT_BLEED || !XBGore_Extreme() )
+	if( color == DONT_BLEED || XBGore_Mode() == XB_BLOOD_OFF )
 		return;
 
 	Vector c = pMonster->Center();
+
+	if( !XBGore_Extreme() )
+	{
+		// no pool for a body that's gone: a burst of droplets that splat around it
+		XB_SendDrops( c, g_vecZero, XB_KIND_SPHERE, 45, 300.0f, 1.0f, color );
+		return;
+	}
 
 	XB_SendDrops( c, g_vecZero, XB_KIND_SPHERE, 90, 360.0f, 1.0f, color );
 
@@ -516,33 +529,99 @@ void XBGore_Frame( void )
 
 /*
 =============
-XBRagdoll_Send
+XBRagdoll messages
 
-The client turns the body into a ragdoll if its model has the Bip01
-skeleton; others keep their death animation. Pushed away from the attacker.
+  short ent, byte kind
+  kind 0 died:  coord hit x3, coord push x3 (units/s), coord body velocity x3, byte hitgroup
+  kind 1 hit:   coord hit x3, coord push x3        (a shot or blast on a body already down)
+  kind 2 clear: nothing                            (the entity respawned alive)
+
+The push comes from the damage that did it: the shot's own direction for
+bullets, away from the blast for explosions, and the client puts most of it
+where the hit landed (cl_dll/xb_ragdoll.cpp).
 =============
 */
+enum { XB_RD_DIED = 0, XB_RD_HIT, XB_RD_CLEAR };
+
+extern entvars_t *g_pevLastInflictor;
+
+static Vector XB_RagdollPush( CBaseMonster *pMonster, entvars_t *pevInflictor, float scale )
+{
+	float dmg = pMonster->m_xbLastDamage;
+	int type = pMonster->m_xbLastDmgType;
+	Vector dir;
+	float speed;
+
+	if( type & ( DMG_BLAST | DMG_MORTAR ))
+	{
+		// thrown away from the blast and up
+		Vector from = pevInflictor ? pevInflictor->origin : pMonster->pev->origin - g_vecAttackDir * 64.0f;
+		dir = pMonster->Center() - from;
+		dir.z = Q_max( dir.z, 0.0f );
+		dir = dir.Normalize() + Vector( 0, 0, 0.6f );
+		speed = 300.0f + dmg * 6.0f;
+		speed = Q_min( speed, 1100.0f );
+	}
+	else
+	{
+		// along the shot: pistol ~230, shotgun ~450, .357 ~550 units/s
+		dir = pMonster->m_xbLastShotDir;
+		if( dir.Length() < 0.1f )
+			dir = -g_vecAttackDir;
+		if( dir.Length() < 0.1f )
+			dir = Vector( 0, 0, 1 );
+		dir = dir.Normalize() + Vector( 0, 0, 0.15f );
+		speed = 150.0f + dmg * 10.0f;
+		if( type & DMG_CLUB )
+			speed += 120.0f; // crowbar and kick shove harder than their damage says
+		speed = Q_min( speed, 1000.0f );
+	}
+
+	return dir.Normalize() * speed * scale;
+}
+
+static void XB_WriteVec( const Vector &v )
+{
+	WRITE_COORD( v.x );
+	WRITE_COORD( v.y );
+	WRITE_COORD( v.z );
+}
+
 void XBRagdoll_Send( CBaseMonster *pMonster )
 {
 	if( !gmsgXBRagdoll || !pMonster )
 		return;
 
-	// g_vecAttackDir points from the victim toward whatever hurt it
-	Vector push = -g_vecAttackDir;
-	if( push == g_vecZero )
-		push = Vector( 0, 0, 1 );
-	push.z += 0.25f;
+	Vector push = XB_RagdollPush( pMonster, g_pevLastInflictor, 1.0f );
 
-	int force = (int)( 120 + pMonster->m_lastDamageAmount * 5.0f );
-	if( force > 255 ) force = 255;
+	// moving when killed: keeps going as it falls
+	Vector vel = pMonster->pev->velocity;
+	if( vel.Length() < 1.0f && pMonster->m_flGroundSpeed > 0.0f && pMonster->m_movementActivity != ACT_IDLE )
+	{
+		UTIL_MakeVectors( Vector( 0, pMonster->pev->angles.y, 0 ));
+		vel = gpGlobals->v_forward * Q_min( pMonster->m_flGroundSpeed, 400.0f );
+	}
 
 	MESSAGE_BEGIN( MSG_ALL, gmsgXBRagdoll );
 		WRITE_SHORT( pMonster->entindex() );
-		WRITE_COORD( push.x * 100.0f );
-		WRITE_COORD( push.y * 100.0f );
-		WRITE_COORD( push.z * 100.0f );
-		WRITE_BYTE( force );
+		WRITE_BYTE( XB_RD_DIED );
+		XB_WriteVec( pMonster->m_xbLastHitPos.Length() > 0.0f ? pMonster->m_xbLastHitPos : pMonster->Center() );
+		XB_WriteVec( push );
+		XB_WriteVec( vel );
 		WRITE_BYTE( pMonster->m_LastHitGroup );
+	MESSAGE_END();
+}
+
+void XBRagdoll_Hit( CBaseMonster *pMonster, entvars_t *pevInflictor )
+{
+	if( !gmsgXBRagdoll || !pMonster )
+		return;
+
+	MESSAGE_BEGIN( MSG_ALL, gmsgXBRagdoll );
+		WRITE_SHORT( pMonster->entindex() );
+		WRITE_BYTE( XB_RD_HIT );
+		XB_WriteVec( pMonster->m_xbLastHitPos.Length() > 0.0f ? pMonster->m_xbLastHitPos : pMonster->Center() );
+		XB_WriteVec( XB_RagdollPush( pMonster, pevInflictor, 0.6f ));
 	MESSAGE_END();
 }
 
@@ -553,11 +632,7 @@ void XBRagdoll_Clear( CBaseEntity *pEnt )
 
 	MESSAGE_BEGIN( MSG_ALL, gmsgXBRagdoll );
 		WRITE_SHORT( pEnt->entindex() );
-		WRITE_COORD( 0 );
-		WRITE_COORD( 0 );
-		WRITE_COORD( 0 );
-		WRITE_BYTE( 0 );
-		WRITE_BYTE( 255 );
+		WRITE_BYTE( XB_RD_CLEAR );
 	MESSAGE_END();
 }
 
