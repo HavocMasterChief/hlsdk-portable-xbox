@@ -254,6 +254,7 @@ public:
 	virtual void ImpulseCommands( void );
 #if XASH_UWP
 	void XBKick( void );	// right stick click, like RealRTCWX
+	void XBAllyCommand( void );	// D-pad down: the ally you look at follows or waits
 	float m_flXBNextKick;
 #endif
 	void CheatImpulseCommands( int iImpulse );

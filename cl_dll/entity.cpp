@@ -530,6 +530,7 @@ void DLLEXPORT HUD_CreateEntities( void )
 	Game_AddObjects();
 #if XASH_UWP
 	XBLeg_AddEntity();  // the kick (xb_leg.cpp)
+	XBGrenade_Frame();  // quick grenade on RB (xb_grenade.cpp)
 #endif
 
 	GetClientVoiceMgr()->CreateEntities();

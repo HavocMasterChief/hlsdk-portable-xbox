@@ -491,6 +491,20 @@ void ClientCommand( edict_t *pEntity )
 	{
 		GetClassPtr( (CBasePlayer *)pev )->XBKick();
 	}
+	else if( FStrEq( pcmd, "xbgrenade_cancel" ) )
+	{
+		// RB grenade called off from the weapon wheel: pin back in
+		CBasePlayer *pl = GetClassPtr( (CBasePlayer *)pev );
+		if( pl->m_pActiveItem && pl->m_pActiveItem->m_iId == WEAPON_HANDGRENADE )
+		{
+			pl->m_pActiveItem->m_flStartThrow = 0.0f;
+			pl->m_pActiveItem->m_flReleaseThrow = 0.0f;
+		}
+	}
+	else if( FStrEq( pcmd, "xbally" ) )
+	{
+		GetClassPtr( (CBasePlayer *)pev )->XBAllyCommand();
+	}
 #endif
 	else if( FStrEq( pcmd, "fullupdate" ) )
 	{

@@ -50,6 +50,8 @@ struct xbRagdoll_t
 	rdpBody phys;
 	float accum, nextSend, died, nextSquish;
 	bool sentAsleep;
+	int sequence;          // the pose the skeleton was read in, held so the
+	float frame;           // client starts from the very same pose
 };
 
 static xbRagdoll_t s_rd[XB_RD_MAX];
@@ -197,6 +199,9 @@ bool XBRagdoll_Begin( CBaseMonster *pMonster, const Vector &hit, const Vector &p
 	r->model = pMonster->pev->model;
 	r->died = gpGlobals->time;
 	r->nextSend = 0.0f;
+	r->sequence = pMonster->pev->sequence;
+	r->frame = pMonster->pev->frame;
+	pMonster->pev->framerate = 0.0f;
 
 	RDP_Throw( &r->phys, RV( hit ), RV( push ), RV( vel ));
 
@@ -375,13 +380,21 @@ void XBRagdoll_Frame( void )
 		if( !r->used )
 			continue;
 
+		// gone (gibbed, removed, a new model in the slot). Not "alive": a
+		// monster that just died still counts as alive for a moment, Half-Life
+		// hands its corpse some health to be shot at. A respawn sends its own
+		// clear (XBRagdoll_Forget from MonsterInit).
 		CBaseEntity *pEnt = r->ent;
-		if( !pEnt || pEnt->pev->model != r->model || pEnt->IsAlive() || FBitSet( pEnt->pev->effects, EF_NODRAW ))
+		if( !pEnt || pEnt->pev->model != r->model || FBitSet( pEnt->pev->effects, EF_NODRAW ) || FBitSet( pEnt->pev->flags, FL_KILLME ))
 		{
-			// gibbed, removed, revived or reused
 			r->used = false;
 			continue;
 		}
+
+		// the death animation never plays: the pose stays the one the body started from
+		pEnt->pev->sequence = r->sequence;
+		pEnt->pev->frame = r->frame;
+		pEnt->pev->framerate = 0.0f;
 
 		if( pl && pl->IsAlive() && pl->pev->movetype != MOVETYPE_NOCLIP )
 			RD_PlayerContact( r, pl );

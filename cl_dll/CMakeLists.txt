@@ -125,6 +125,7 @@ set (CLDLL_SOURCES
 	xb_wheel.cpp
 	xb_gore_world.cpp
 	xb_leg.cpp
+	xb_grenade.cpp
 	../public/safe_snprintf.c
 )
 

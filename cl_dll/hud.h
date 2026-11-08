@@ -238,6 +238,9 @@ private:
 };
 void XBRagdoll_Init( void );
 void XBLeg_Init( void );
+void XBGrenade_Init( void );
+void XBGrenade_Reset( void );
+void XBGrenade_Frame( void );
 void XBLeg_VidInit( void );
 void XBLeg_AddEntity( void );
 void XBLeg_ViewModel( struct cl_entity_s *view, const float *up );

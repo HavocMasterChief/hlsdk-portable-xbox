@@ -5082,3 +5082,58 @@ void CBasePlayer::XBKick( void )
 	pev->punchangle.x = -5.0f;
 }
 #endif
+
+#if XASH_UWP
+/*
+=============
+CBasePlayer::XBAllyCommand
+
+D-pad down: the scientist or guard you're looking at, even across a room,
+starts or stops following you, the same as walking up and pressing Use.
+=============
+*/
+void CBasePlayer::XBAllyCommand( void )
+{
+	if( !IsAlive() )
+		return;
+
+	UTIL_MakeVectors( pev->v_angle + pev->punchangle );
+	Vector src = GetGunPosition();
+	Vector fwd = gpGlobals->v_forward;
+
+	// whoever is nearest the crosshair, in sight, within 1024 units
+	CBaseEntity *best = NULL;
+	float bestDot = 0.94f;   // about 20 degrees off the crosshair
+	CBaseEntity *pEnt = NULL;
+
+	while(( pEnt = UTIL_FindEntityInSphere( pEnt, src, 1024.0f )) != NULL )
+	{
+		CBaseMonster *pMon = pEnt->MyMonsterPointer();
+		if( !pMon || !pMon->IsAlive() || pEnt == this )
+			continue;
+		if( !( pEnt->ObjectCaps() & FCAP_IMPULSE_USE ) || IRelationship( pEnt ) != R_AL )
+			continue;
+
+		Vector to = ( pEnt->EyePosition() - src );
+		float dot = DotProduct( to.Normalize(), fwd );
+		if( dot <= bestDot )
+			continue;
+
+		TraceResult tr;
+		UTIL_TraceLine( src, pEnt->EyePosition(), ignore_monsters, edict(), &tr );
+		if( tr.flFraction < 1.0f )
+			continue;
+
+		bestDot = dot;
+		best = pEnt;
+	}
+
+	if( !best )
+	{
+		EMIT_SOUND( ENT( pev ), CHAN_ITEM, "common/wpn_denyselect.wav", 0.4f, ATTN_NORM );
+		return;
+	}
+
+	best->Use( this, this, USE_TOGGLE, 0 );
+}
+#endif
