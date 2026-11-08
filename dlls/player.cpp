@@ -1885,12 +1885,11 @@ void CBasePlayer::UpdateStatusBar()
 void CBasePlayer::PreThink( void )
 {
 #if XASH_UWP
-	// walk / sprint: the movement code honours this whatever way the stick's
-	// movement arrives (crouching and swimming still slow you as usual)
 	{
-		float want = m_xbSprint ? 320.0f : 192.0f;
-		if( pev->maxspeed != want )
-			g_engfuncs.pfnSetClientMaxspeed( edict(), want );
+		// sprint is gone: normal Half-Life speed, also for saves made while
+		// build 29's walk/sprint speeds were set
+		if( pev->maxspeed == 192.0f || pev->maxspeed == 320.0f )
+			g_engfuncs.pfnSetClientMaxspeed( edict(), 0.0f );
 	}
 #endif
 	int buttonsChanged = ( m_afButtonLast ^ pev->button );	// These buttons have changed this frame
