@@ -501,6 +501,14 @@ void ClientCommand( edict_t *pEntity )
 			pl->m_pActiveItem->m_flReleaseThrow = 0.0f;
 		}
 	}
+	else if( FStrEq( pcmd, "xbsprint" ) )
+	{
+		GetClassPtr( (CBasePlayer *)pev )->m_xbSprint = atoi( CMD_ARGV( 1 )) != 0;
+	}
+	else if( FStrEq( pcmd, "xbgrenade" ) )
+	{
+		GetClassPtr( (CBasePlayer *)pev )->XBGrenade( CMD_ARGV( 1 ));
+	}
 	else if( FStrEq( pcmd, "xbally" ) )
 	{
 		GetClassPtr( (CBasePlayer *)pev )->XBAllyCommand();

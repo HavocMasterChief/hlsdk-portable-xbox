@@ -211,6 +211,8 @@ static bool RD_BuildHuman( rdpBody *b, int numbones, const char *const *names, c
 
 	b->human = true;
 	b->np = J_NUM;
+	b->torso[J_PELVIS] = b->torso[J_CHEST] = b->torso[J_HEAD] = true;
+	b->torso[J_LSHOULDER] = b->torso[J_RSHOULDER] = b->torso[J_LHIP] = b->torso[J_RHIP] = true;
 	for( int j = 0; j < J_NUM; j++ )
 	{
 		b->bone[j] = jointBone[j];
@@ -305,6 +307,7 @@ static bool RD_BuildGeneric( rdpBody *b, int numbones, const int *parents, const
 	for( int n = 0; n < b->np; n++ )
 	{
 		core[n] = ( n == 0 ) || ( b->restP[n] - b->restP[0] ).Length() <= coreRadius;
+		b->torso[n] = core[n];
 		b->radius[n] = core[n] ? RD_Max( 2.5f, extent * 0.08f ) : RD_Max( 1.5f, extent * 0.04f );
 	}
 
@@ -417,8 +420,26 @@ static rdpVec RD_JointOffset( const rdpVec *p, int a, int mid, int c )
 	return p[mid] - ( p[a] + line * t );
 }
 
+void RDP_PinTorso( rdpBody *b, bool pin )
+{
+	b->pinned = pin;
+	if( pin )
+	{
+		for( int n = 0; n < b->np; n++ )
+			if( b->torso[n] )
+				b->o[n] = b->p[n];
+	}
+}
+
+// how much a particle gives way: a pinned torso doesn't
+static inline float RD_Give( const rdpBody *b, int n )
+{
+	return ( b->pinned && b->torso[n] ) ? 0.0f : 1.0f;
+}
+
 void RDP_Throw( rdpBody *b, const rdpVec &hit, const rdpVec &push, const rdpVec &vel )
 {
+	b->pinned = false;
 	if( b->human )
 	{
 		rdpVec fwd = RD_Forward( b->restP );
@@ -443,6 +464,7 @@ void RDP_Throw( rdpBody *b, const rdpVec &hit, const rdpVec &push, const rdpVec 
 
 void RDP_Impulse( rdpBody *b, const rdpVec &hit, const rdpVec &push, float reach )
 {
+	b->pinned = false;
 	for( int n = 0; n < b->np; n++ )
 	{
 		float d = ( b->p[n] - hit ).Length();
@@ -521,10 +543,14 @@ static void RD_Constrain( rdpBody *b )
 			if( len < 0.001f || ( len >= l->lo && len <= l->hi ))
 				continue;
 
+			float wa = RD_Give( b, l->a ), wc = RD_Give( b, l->b );
+			if( wa + wc <= 0.0f )
+				continue;
+
 			float target = len < l->lo ? l->lo : l->hi;
-			rdpVec corr = d * ( 0.5f * ( len - target ) / len );
-			a = a + corr;
-			c = c - corr;
+			rdpVec corr = d * (( len - target ) / len / ( wa + wc ));
+			a = a + corr * wa;
+			c = c - corr * wc;
 		}
 
 		// limbs keep out of each other and the torso
@@ -541,9 +567,12 @@ static void RD_Constrain( rdpBody *b )
 				if( len >= r || rest < r || len < 0.001f )
 					continue;
 
-				rdpVec corr = d * ( 0.25f * ( r - len ) / len );
-				b->p[i] = b->p[i] - corr;
-				b->p[j] = b->p[j] + corr;
+				float wi = RD_Give( b, i ), wj = RD_Give( b, j );
+				if( wi + wj <= 0.0f )
+					continue;
+				rdpVec corr = d * ( 0.5f * ( r - len ) / len / ( wi + wj ));
+				b->p[i] = b->p[i] - corr * wi;
+				b->p[j] = b->p[j] + corr * wj;
 			}
 		}
 
@@ -611,8 +640,8 @@ void RDP_Step( rdpBody *b )
 		rdpVec va = b->p[l->a] - b->o[l->a];
 		rdpVec vc = b->p[l->b] - b->o[l->b];
 		rdpVec dv = ( vc - va ) * RD_JOINT_FRIC;
-		b->o[l->a] = b->o[l->a] - dv;
-		b->o[l->b] = b->o[l->b] + dv;
+		b->o[l->a] = b->o[l->a] - dv * RD_Give( b, l->a );
+		b->o[l->b] = b->o[l->b] + dv * RD_Give( b, l->b );
 	}
 
 	// once it has landed, the body winds down instead of fidgeting forever
@@ -620,6 +649,12 @@ void RDP_Step( rdpBody *b )
 
 	for( int n = 0; n < b->np; n++ )
 	{
+		if( RD_Give( b, n ) == 0.0f )
+		{
+			b->o[n] = b->p[n];
+			continue;
+		}
+
 		rdpVec cur = b->p[n];
 		float keep = b->contact[n] ? RD_CONTACT_KEEP : RD_AIR_DRAG;
 		keep *= 1.0f - 0.25f * settle;
@@ -632,7 +667,8 @@ void RDP_Step( rdpBody *b )
 	// hold together, then settle on the world: the world has the last word
 	RD_Constrain( b );
 	for( int n = 0; n < b->np; n++ )
-		RD_Collide( b, n );
+		if( RD_Give( b, n ) > 0.0f )
+			RD_Collide( b, n );
 
 	for( int n = 0; n < b->np; n++ )
 		moved = RD_Max( moved, ( b->p[n] - b->o[n] ).Length());

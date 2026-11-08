@@ -78,6 +78,9 @@ struct rdpBody
 	int nl;
 	rdpLink links[RDP_MAX_LINKS];
 
+	bool torso[RDP_MAX_P];  // pelvis, chest, head, shoulders, hips / a creature's core
+	bool pinned;            // torso held still: only limbs move (walked over)
+
 	float kneeSide;
 	float awake;            // seconds since last woken
 	float restTime;
@@ -91,6 +94,10 @@ void RDP_Throw( rdpBody *b, const rdpVec &hit, const rdpVec &push, const rdpVec 
 
 // a hit on a body: add speed around the hit point, wake it
 void RDP_Impulse( rdpBody *b, const rdpVec &hit, const rdpVec &push, float reach );
+
+// hold the torso still so only arms and legs react (the player walking into a
+// body, like RealRTCWX); any hit or throw lets it go again
+void RDP_PinTorso( rdpBody *b, bool pin );
 
 // one physics step; clears b->moving once it has settled
 void RDP_Step( rdpBody *b );

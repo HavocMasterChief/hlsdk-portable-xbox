@@ -255,6 +255,9 @@ public:
 #if XASH_UWP
 	void XBKick( void );	// right stick click, like RealRTCWX
 	void XBAllyCommand( void );	// D-pad down: the ally you look at follows or waits
+	void XBGrenade( const char *what );	// RB: start / throw / cancel a quick grenade
+	bool m_xbSprint;		// left stick sprint, sent by the engine (xbsprint)
+	float m_flXBGrenadeStart;
 	float m_flXBNextKick;
 #endif
 	void CheatImpulseCommands( int iImpulse );

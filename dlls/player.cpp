@@ -1884,6 +1884,15 @@ void CBasePlayer::UpdateStatusBar()
 
 void CBasePlayer::PreThink( void )
 {
+#if XASH_UWP
+	// walk / sprint: the movement code honours this whatever way the stick's
+	// movement arrives (crouching and swimming still slow you as usual)
+	{
+		float want = m_xbSprint ? 320.0f : 192.0f;
+		if( pev->maxspeed != want )
+			g_engfuncs.pfnSetClientMaxspeed( edict(), want );
+	}
+#endif
 	int buttonsChanged = ( m_afButtonLast ^ pev->button );	// These buttons have changed this frame
 
 	// Debounced button codes for pressed/released
@@ -5135,5 +5144,68 @@ void CBasePlayer::XBAllyCommand( void )
 	}
 
 	best->Use( this, this, USE_TOGGLE, 0 );
+}
+#endif
+
+#if XASH_UWP
+/*
+=============
+CBasePlayer::XBGrenade
+
+RB: press starts the fuse (no weapon switch, no animation), release throws
+it from the eyes, aimed and powered like a hand grenade. Held past three
+seconds it goes off on release, as the hand grenade does. The weapon wheel
+calls it off.
+=============
+*/
+void CBasePlayer::XBGrenade( const char *what )
+{
+	int ammo = GetAmmoIndex( "Hand Grenade" );
+
+	if( !IsAlive() || ammo < 0 )
+		return;
+
+	if( FStrEq( what, "start" ))
+	{
+		if( m_rgAmmo[ammo] <= 0 )
+			return;
+		m_flXBGrenadeStart = gpGlobals->time;
+		return;
+	}
+
+	if( FStrEq( what, "cancel" ))
+	{
+		m_flXBGrenadeStart = 0.0f;
+		return;
+	}
+
+	if( !FStrEq( what, "throw" ) || m_flXBGrenadeStart <= 0.0f || m_rgAmmo[ammo] <= 0 )
+		return;
+
+	// the hand grenade's own throw (handgrenade.cpp WeaponIdle)
+	Vector angThrow = pev->v_angle + pev->punchangle;
+	if( angThrow.x < 0.0f )
+		angThrow.x = -10.0f + angThrow.x * ( ( 90.0f - 10.0f ) / 90.0f );
+	else
+		angThrow.x = -10.0f + angThrow.x * ( ( 90.0f + 10.0f ) / 90.0f );
+
+	float flVel = ( 90.0f - angThrow.x ) * 4.0f;
+	if( flVel > 500.0f )
+		flVel = 500.0f;
+
+	UTIL_MakeVectors( angThrow );
+	Vector vecSrc = pev->origin + pev->view_ofs + gpGlobals->v_forward * 16.0f;
+	Vector vecThrow = gpGlobals->v_forward * flVel + pev->velocity;
+
+	float time = m_flXBGrenadeStart - gpGlobals->time + 3.0f;
+	if( time < 0.0f )
+		time = 0.0f;
+
+	CGrenade::ShootTimed( pev, vecSrc, vecThrow, time );
+	m_rgAmmo[ammo]--;
+	m_flXBGrenadeStart = 0.0f;
+
+	SetAnimation( PLAYER_ATTACK1 );
+	EMIT_SOUND_DYN( ENT( pev ), CHAN_ITEM, "weapons/cbar_miss1.wav", 0.6f, ATTN_NORM, 0, 120 );
 }
 #endif

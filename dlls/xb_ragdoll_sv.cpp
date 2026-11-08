@@ -315,6 +315,10 @@ static void RD_PlayerContact( xbRagdoll_t *r, CBaseEntity *pl )
 
 	for( int n = 0; n < r->phys.np; n++ )
 	{
+		// the torso stays where it is: only arms and legs get pushed about
+		if( r->phys.torso[n] )
+			continue;
+
 		rdpVec &p = r->phys.p[n];
 		if( p.z < feet - 6.0f || p.z > feet + 30.0f )
 			continue;
@@ -325,13 +329,16 @@ static void RD_PlayerContact( xbRagdoll_t *r, CBaseEntity *pl )
 		if( d >= reach || d < 0.01f )
 			continue;
 
-		// out of the way, sideways and along with the step
-		float out = ( reach - d ) * 0.5f;
+		if( !touched )
+			RDP_PinTorso( &r->phys, true );
+
+		// out of the way, and a soft nudge along with the step
+		float out = ( reach - d ) * 0.4f;
 		p.x += dx / d * out;
 		p.y += dy / d * out;
 
-		float shove = speed > 230.0f ? 0.55f : 0.3f;   // sprinting kicks harder
-		rdpVec v( vel.x * shove, vel.y * shove, speed > 50.0f ? 25.0f : 0.0f );
+		float shove = speed > 230.0f ? 0.25f : 0.12f;
+		rdpVec v( vel.x * shove, vel.y * shove, speed > 50.0f ? 10.0f : 0.0f );
 		r->phys.o[n] = r->phys.o[n] - v * RDP_STEP;
 		touched = true;
 		touchedP = n;
